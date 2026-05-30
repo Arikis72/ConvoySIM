@@ -1,0 +1,7 @@
+---
+description: DEPRECATED — see AGENTS.md
+alwaysApply: false
+---
+
+This file has been deprecated. All documentation workflow rules are in `AGENTS.md` §10.
+Original content archived in `.cursor/rules/archive/documentation-workflow.mdc`.

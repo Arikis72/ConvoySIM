@@ -1,0 +1,15 @@
+Time_s,Truck1_Velocity_kph,Truck1_Event,Truck2_Image_Event,Truck3_Image_Event,Notes
+0,0,,,,Leader starts stopped
+2,5,,,,Leader accelerates
+6,10,,,,Leader reaches convoy target speed
+18,,,Loss,,Truck #2 loses image identification of Truck #1
+20,10,,,,Leader continues at target speed
+22,,,Resume,,Truck #2 image identification resumes
+24,5,,,,Leader slows down
+28,0,,,,Leader stops
+30,,,,Loss,Truck #3 loses image identification of Truck #2
+34,0,,,Resume,Truck #3 image identification resumes while leader remains stopped
+37,0,,,,
+40,10,,,,Leader resumes target speed
+50,,,,Loss,Truck #3 loses image identification again
+60,10,,,,Scenario end point

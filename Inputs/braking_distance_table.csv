@@ -1,0 +1,31 @@
+RoadType,BrakingType,Velocity,Distance_m
+Asphalt,Orange,0.1,0.1
+Asphalt,Red,0.1,0.1
+Dust road,Orange,0.1,0.1
+Dust road,Red,0.1,0.1
+Gravel,Orange,0.1,0.1
+Gravel,Red,0.1,0.1
+Gravel,Orange,5,3
+Gravel,Orange,10,7
+Gravel,Orange,15,13
+Gravel,Orange,20,22
+Gravel,Red,5,1.2
+Gravel,Red,10,4
+Gravel,Red,15,8.5
+Gravel,Red,20,15
+Asphalt,Orange,5,2
+Asphalt,Orange,10,5
+Asphalt,Orange,15,10
+Asphalt,Orange,20,17
+Asphalt,Red,5,0.8
+Asphalt,Red,10,3
+Asphalt,Red,15,7
+Asphalt,Red,20,12
+Dust road,Orange,5,4
+Dust road,Orange,10,9
+Dust road,Orange,15,16
+Dust road,Orange,20,27
+Dust road,Red,5,1.6
+Dust road,Red,10,5
+Dust road,Red,15,10.5
+Dust road,Red,20,18

@@ -1,0 +1,5 @@
+Time_s,Truck1_Velocity_kph,Truck1_Event,Truck2_Image_Event,Truck3_Image_Event,Notes
+0,0,,,,Leader starts stopped
+6,10,,,,Leader reaches convoy target speed
+60,10,,,,Scenario end point
+

@@ -1,0 +1,31 @@
+---
+description: ARCHIVED 2026-05-30 — content migrated to AGENTS.md (§6 Testing, §7 Debugging)
+alwaysApply: false
+---
+
+# ARCHIVED
+
+This rule file has been archived. Its content has been migrated to `AGENTS.md` §6 and §7.
+See `AGENTS.md` as the single source of truth.
+
+---
+
+## Original content (preserved for reference)
+
+Before finishing a code change, run the strongest available validation.
+
+Preferred order:
+
+1. Existing test suite.
+2. Targeted tests for the changed logic.
+3. Python syntax check:
+   `python -m py_compile <changed_file.py>`
+4. Safe import check, if applicable.
+
+If validation cannot be run:
+
+- Say exactly what was not run.
+- Explain why.
+- Mention the risk.
+
+When adding new behavior, prefer adding a small test or at least documenting a manual verification step in `STATUS.md`.

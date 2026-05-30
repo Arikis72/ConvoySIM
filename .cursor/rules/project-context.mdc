@@ -1,0 +1,7 @@
+---
+description: DEPRECATED — see AGENTS.md
+alwaysApply: false
+---
+
+This file has been deprecated. All project-context and session-start rules are in `AGENTS.md` §1 and §2.
+Original content archived in `.cursor/rules/archive/project-context.mdc`.

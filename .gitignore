@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# ConvoySIM — generated outputs (large, transient, not source)
+outputs/
+
+# ConvoySIM — user-specific settings
+convoysim.ini
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor / IDE
+.vscode/
+*.swp
+*.swo
+
+# Test artifacts
+.coverage
+htmlcov/

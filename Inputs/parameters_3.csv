@@ -1,0 +1,33 @@
+Parameter,Value,Unit,Description
+Truck length,9,m,Shared truck length for all trucks
+Initial gap between Truck #1 and Truck #2,10,m,Gap measured from Truck #1 rear bumper to Truck #2 front bumper
+Initial gap between Truck #2 and Truck #3,10,m,Gap measured from Truck #2 rear bumper to Truck #3 front bumper
+Initial Truck #1 velocity,0,kph,Initial leader velocity
+Initial Truck #2 velocity,0,kph,Initial Truck #2 velocity
+Initial Truck #3 velocity,0,kph,Initial Truck #3 velocity
+Max velocity,17,kph,Maximum allowed truck velocity
+Max acceleration,1.2,m/s^2,Maximum positive acceleration
+Max red deceleration,4,m/s^2,Fallback emergency braking if table lookup is unavailable
+Minimum allowed gap distance,3,m,Gap below this value is a minimum-gap violation
+Maximum allowed gap distance,25,m,Gap above this value is a maximum-gap violation
+Red distance,6,m,Gap below this value triggers red braking
+Orange distance,9,m,Gap below this value triggers controlled braking
+Start moving identification delay,500,ms,Delay before follower recognizes front truck movement
+Distance identification delay,200,ms,Continuous delay for perceived gap position velocity and classification
+Truck image identification loss distance,20,m,Tracking is lost if gap exceeds this value
+Truck image identification resume distance,15,m,Tracking can resume if gap is at or below this value
+Under-loss following truck velocity,10,kph,Safe follower velocity during image-identification loss
+Under-loss leading truck velocity,5,kph,Safe leading-truck velocity during communicated loss
+Trucks communicating,No,Yes/No,Enables inter-truck communication behavior
+Resume by distance,No,Yes/No,Allows automatic image-identification resume when the frozen target is reached
+Communication latency,200,ms,Current communication latency
+Communication reliability,100,%,Message approval reliability
+Convoy target speed,10,kph,Default convoy target speed
+Target gap,10,m,Desired nominal convoy gap
+Road type,Asphalt,text,Selected braking-table road type
+Orange deceleration,1,m/s^2,Fallback controlled braking if table lookup is unavailable
+Green acceleration,0.8,m/s^2,Follower acceleration when resuming movement
+Start moving gap,6,m,Minimum measured gap required before a stopped follower starts moving
+Optimal acceleration,0.8,m/s^2,Tunable acceleration for closing gaps and leader behavior
+Simulation time step,0.1,s,Internal calculation step
+Output table resolution,1,s,Output table interval

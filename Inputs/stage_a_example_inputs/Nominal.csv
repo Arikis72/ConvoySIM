@@ -1,0 +1,11 @@
+Time_s,Truck1_Velocity_kph,Truck2_Image_Event,Truck3_Image_Event,Notes
+0,0,,,Leader starts stopped
+2,5,,,Leader accelerates
+6,10,,,Leader reaches convoy target speed
+20,10,,,
+25,20,,,
+40,20,,Loss,
+42,10,,Resume,
+45,10,,,
+120,10,,,End of const speed
+125,0,,,Leader decelerates

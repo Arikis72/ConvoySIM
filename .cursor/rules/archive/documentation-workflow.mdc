@@ -1,0 +1,25 @@
+---
+description: ARCHIVED 2026-05-30 — content migrated to AGENTS.md (§10 Documentation & memory)
+alwaysApply: false
+---
+
+# ARCHIVED
+
+This rule file has been archived. Its content has been migrated to `AGENTS.md` §10.
+See `AGENTS.md` as the single source of truth.
+
+---
+
+## Original content (preserved for reference)
+
+After completing meaningful work:
+
+- Update `TASKS.md`:
+  - mark completed tasks
+  - add discovered issues
+- Update `STATUS.md` if the working state changed.
+- Update `DECISIONS.md` if a design decision was made.
+- Update `CHANGELOG.md` for user-visible changes.
+- Keep documentation concise and factual.
+- Do not duplicate the same rule in many files.
+- Do not delete historical decisions unless explicitly requested.

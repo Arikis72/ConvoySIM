@@ -1,0 +1,10 @@
+---
+description: Single source of truth pointer for ConvoySIM
+alwaysApply: true
+---
+
+Read and follow `AGENTS.md` in the project root (`C:\dev\ConvoySIM\AGENTS.md`).
+
+It is the **single source of truth** for all project rules: role, session start, context tiers, requirement handling, planning, implementation, testing, debugging, completion criteria, and the module map.
+
+Do not restate or duplicate its rules here or in any other `.cursor/rules` file.

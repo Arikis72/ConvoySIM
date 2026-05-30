@@ -1,0 +1,33 @@
+---
+description: ARCHIVED 2026-05-30 — content migrated to AGENTS.md (§1 Session start, §2 Context-loading tiers)
+alwaysApply: false
+---
+
+# ARCHIVED
+
+This rule file has been archived. Its content has been migrated to `AGENTS.md` §1 and §2.
+See `AGENTS.md` as the single source of truth.
+
+---
+
+## Original content (preserved for reference)
+
+Before substantial work, inspect these files if they exist:
+
+1. `SimRequirements.md`
+2. `ChatGPT.txt`
+3. `PLANNING.md`
+4. `TASKS.md`
+5. `STATUS.md`
+6. `DECISIONS.md`
+
+Use the files as follows:
+
+- `SimRequirements.md`: required behavior and acceptance criteria.
+- `ChatGPT.txt`: extra project guidance and user-specific instructions.
+- `PLANNING.md`: architecture and design direction.
+- `TASKS.md`: current tasks and discovered issues.
+- `STATUS.md`: current working state and known risks.
+- `DECISIONS.md`: design decisions and rationale.
+
+If the files disagree, stop and explain the conflict before making broad changes.

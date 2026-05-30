@@ -1,0 +1,4 @@
+Scenario,Orange deceleration,Orange distance,Green acceleration,Start moving gap,Optimal acceleration,Target gap
+Baseline,1.0,8.0,1.0,10.0,0.8,10.0
+Gentler braking,0.7,9.0,0.8,11.0,0.7,11.0
+Faster response,1.2,10.0,1.2,12.0,1.0,12.0

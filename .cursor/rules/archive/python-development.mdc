@@ -1,0 +1,23 @@
+---
+description: ARCHIVED 2026-05-30 — content migrated to AGENTS.md (§5 Implementation, §13 Hard rules)
+alwaysApply: false
+---
+
+# ARCHIVED
+
+This rule file has been archived. Its content has been migrated to `AGENTS.md` §5 and §13.
+See `AGENTS.md` as the single source of truth.
+
+---
+
+## Original content (preserved for reference)
+
+- Prefer readable, explicit Python code.
+- Keep functions focused and testable.
+- Separate simulation logic from UI, file I/O, and reporting.
+- Avoid hidden global state unless there is a clear documented reason.
+- Validate inputs before running simulation logic.
+- Use clear error messages that explain what failed and how to fix it.
+- Do not add heavy dependencies without explicit approval.
+- Preserve existing function signatures unless the task requires changing them.
+- When changing logic, consider edge cases and update tests or validation notes.
