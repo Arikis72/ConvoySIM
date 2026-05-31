@@ -1,3 +1,9 @@
+# Nested repositories — SimGenerator is a separate git repo inside this directory
+SimGenerator/
+
+# AI session files (Claude Code memory)
+.claude/
+
 # Python
 __pycache__/
 *.py[cod]
