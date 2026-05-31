@@ -604,13 +604,11 @@ class ConvoyPlaybackCanvas:
         self._draw_truck(scale, row.truck1_position_m, road_y, row.truck1_velocity_kph, "", row.truck1_state, row.truck1_command, "", label_lane=2)
         self._draw_lost_target_markers(scale, lost_target_markers(self.rows, index, self.truck_length_m), road_line_y)
         self._draw_header(row)
-        self._draw_braking_distances(row, road_line_y)
 
     def _draw_header(self, row: SimulationRow) -> None:
-        text = f"Time: {row.time_s:.1f}s"
         if row.communication_message:
-            text += f" | Communication: {row.communication_status} - {row.communication_message}"
-        self.canvas.create_text(16, 50, anchor="w", text=text, font=("Arial", 11, "bold"))
+            text = f"Communication: {row.communication_status} — {row.communication_message}"
+            self.canvas.create_text(16, 14, anchor="w", text=text, font=("Arial", 10))
 
     def _draw_distance_ticks(self, scale: PositionScale, road_line_y: float) -> None:
         for value in distance_tick_values(scale.min_position_m, scale.max_position_m):

@@ -109,13 +109,15 @@ def validate_leader_profile(profile: LeaderProfile, parameters: SimulationParame
     errors: list[ValidationMessage] = []
 
     max_delta_mps2 = parameters.max_acceleration_mps2
-    max_brake_mps2 = parameters.max_red_deceleration_mps2
+    # Allow emergency deceleration rate: FORT events in the scenario produce it by design
+    max_brake_mps2 = max(parameters.max_red_deceleration_mps2, parameters.emergency_deceleration_mps2)
+    _EPS = 1e-6  # floating-point guard for exact boundary values
 
     for index, (left, right) in enumerate(zip(profile.points, profile.points[1:]), start=1):
         dt_s = right.time_s - left.time_s
         acceleration_mps2 = (right.velocity_kph - left.velocity_kph) * KPH_TO_MPS / dt_s
 
-        if acceleration_mps2 > max_delta_mps2:
+        if acceleration_mps2 > max_delta_mps2 + _EPS:
             errors.append(
                 ValidationMessage(
                     f"leader_profile.segment_{index}",
@@ -123,7 +125,7 @@ def validate_leader_profile(profile: LeaderProfile, parameters: SimulationParame
                 )
             )
 
-        if acceleration_mps2 < -max_brake_mps2:
+        if acceleration_mps2 < -(max_brake_mps2 + _EPS):
             errors.append(
                 ValidationMessage(
                     f"leader_profile.segment_{index}",

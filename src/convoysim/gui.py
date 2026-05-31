@@ -484,6 +484,28 @@ def _next_version_name(scenario_path: str) -> str:
     return str(parent / f"{stem}_Ver{max_n + 1}.csv")
 
 
+def _compress_scenario_rows(rows: list[dict]) -> list[dict]:
+    """Remove consecutive rows that carry no new information.
+
+    Keeps: first/last row, any row with a non-empty event column, and rows
+    that mark the boundary of a velocity change (the last constant-velocity
+    row before a change AND the first row after the change).
+    """
+    if len(rows) <= 2:
+        return rows
+    result = []
+    for i, row in enumerate(rows):
+        is_boundary = (i == 0 or i == len(rows) - 1)
+        has_event = bool(row.get("t1e") or row.get("t2e") or row.get("t3e"))
+        prev_vel = rows[i - 1]["vel"] if i > 0 else None
+        next_vel = rows[i + 1]["vel"] if i < len(rows) - 1 else None
+        vel_changed_from_prev = prev_vel is not None and abs(row["vel"] - prev_vel) > 1e-4
+        vel_changes_after = next_vel is not None and abs(row["vel"] - next_vel) > 1e-4
+        if is_boundary or has_event or vel_changed_from_prev or vel_changes_after:
+            result.append(row)
+    return result
+
+
 def _save_online_scenario(
     scenario_path: str,
     live_entry_time_s: float,
@@ -491,44 +513,66 @@ def _save_online_scenario(
     save_path: str,
 ) -> None:
     """Write a merged scenario CSV: original rows up to live_entry_time,
-    then live rows (leader velocity from simulation; Trucks 2/3 events from original)."""
+    then compressed live rows (updated leader velocity; Trucks 2/3 events from
+    original; FORT activation written at the first FORT state row)."""
     timeline = ScenarioTimeline.from_csv(scenario_path)
 
-    # Build lookup: time → (truck1_event, truck2_event, truck3_event)
+    # Build lookup: time → events from original scenario
     t1_events = {e.time_s: e.event.value for e in timeline.truck1_events()}
     t2_events = {e.time_s: e.event.value for e in timeline.truck2_image_events()}
     t3_events = {e.time_s: e.event.value for e in timeline.truck3_image_events()}
 
+    # Find the first time FORT was activated in the live rows
+    fort_activated_time: float | None = None
+    for live_row in live_rows:
+        if live_row.truck1_state == "FORT_EMERGENCY_DECEL" and fort_activated_time is None:
+            fort_activated_time = live_row.time_s
+
     # Collect original rows up to the live-entry boundary
-    original_rows = [
-        row for row in timeline.rows
-        if row.time_s <= live_entry_time_s + 1e-9
-    ]
+    original_rows = [row for row in timeline.rows if row.time_s <= live_entry_time_s + 1e-9]
+
+    # Build unified row-dict list for compression
+    all_rows: list[dict] = []
+    for row in original_rows:
+        all_rows.append({
+            "t": row.time_s,
+            "vel": row.truck1_velocity_kph if row.truck1_velocity_kph is not None else 0.0,
+            "t1e": row.truck1_event.value if row.truck1_event is not None else "",
+            "t2e": row.truck2_image_event.value if row.truck2_image_event is not None else "",
+            "t3e": row.truck3_image_event.value if row.truck3_image_event is not None else "",
+            "notes": row.notes,
+        })
+    for live_row in live_rows:
+        t = round(live_row.time_s, 10)
+        # Write FORT event at the first FORT row; otherwise carry original scenario events
+        if fort_activated_time is not None and abs(live_row.time_s - fort_activated_time) < 1e-9:
+            t1e = "FORT activated"
+        else:
+            t1e = t1_events.get(t, "")
+        all_rows.append({
+            "t": live_row.time_s,
+            "vel": live_row.truck1_velocity_kph,
+            "t1e": t1e,
+            "t2e": t2_events.get(t, ""),
+            "t3e": t3_events.get(t, ""),
+            "notes": "",
+        })
+
+    compressed = _compress_scenario_rows(all_rows)
 
     output_path = Path(save_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", newline="", encoding="utf-8") as csv_file:
         writer = csv.writer(csv_file)
         writer.writerow(["Time_s", "Truck1_Velocity_kph", "Truck1_Event", "Truck2_Image_Event", "Truck3_Image_Event", "Notes"])
-        for row in original_rows:
+        for row in compressed:
             writer.writerow([
-                f"{row.time_s:.3f}",
-                f"{row.truck1_velocity_kph:.3f}" if row.truck1_velocity_kph is not None else "",
-                row.truck1_event.value if row.truck1_event is not None else "",
-                row.truck2_image_event.value if row.truck2_image_event is not None else "",
-                row.truck3_image_event.value if row.truck3_image_event is not None else "",
-                row.notes,
-            ])
-        # Append live-controlled rows
-        for live_row in live_rows:
-            t = round(live_row.time_s, 10)
-            writer.writerow([
-                f"{live_row.time_s:.3f}",
-                f"{live_row.truck1_velocity_kph:.3f}",
-                t1_events.get(t, ""),
-                t2_events.get(t, ""),
-                t3_events.get(t, ""),
-                "",
+                f"{row['t']:.3f}",
+                f"{row['vel']:.3f}",
+                row["t1e"],
+                row["t2e"],
+                row["t3e"],
+                row["notes"],
             ])
 
 
@@ -556,6 +600,7 @@ class OnlineVisualizationWindow:
     ) -> None:
         self.parent = parent
         self.rows: list[SimulationRow] = list(rows)
+        self._original_rows: tuple[SimulationRow, ...] = rows  # restored by Back to Sim
         self._parameters_path = parameters_path
         self._scenario_path = scenario_path
         self._braking_table_path = braking_table_path
@@ -590,13 +635,15 @@ class OnlineVisualizationWindow:
         self.window.minsize(1000, 760)
         self.window.protocol("WM_DELETE_WINDOW", self.close)
 
-        # Load parameters to populate default rate fields
+        # Load parameters to populate default rate fields and braking info labels
+        self._orange_braking_mode = 0
         try:
             loaded = load_parameters_csv(parameters_path)
             p = loaded.simulation_parameters
             self._accel_rate_var.set(f"{p.max_acceleration_mps2:.2f}")
             self._decel_rate_var.set(f"{p.orange_deceleration_mps2:.2f}")
             self._steps_per_second = max(1, round(1.0 / p.simulation_time_step_s))
+            self._orange_braking_mode = p.orange_braking_mode
         except Exception:  # noqa: BLE001
             pass
 
@@ -647,13 +694,13 @@ class OnlineVisualizationWindow:
         ttk.Entry(leader_row, textvariable=self._accel_rate_var, width=6).pack(side=tk.LEFT, padx=(0, 2))
         ttk.Label(leader_row, text="m/s²").pack(side=tk.LEFT)
         ttk.Separator(leader_row, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
-        self._btn(leader_row, "Decelerate", self._on_decelerate, "edit").pack(side=tk.LEFT, padx=(4, 2))
+        self._btn(leader_row, "Decelerate", self._on_decelerate, "decelerate").pack(side=tk.LEFT, padx=(4, 2))
         ttk.Entry(leader_row, textvariable=self._decel_rate_var, width=6).pack(side=tk.LEFT, padx=(0, 2))
         ttk.Label(leader_row, text="m/s²").pack(side=tk.LEFT)
         ttk.Separator(leader_row, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
-        self._btn(leader_row, "Orange Brake", self._on_orange_brake, "edit").pack(side=tk.LEFT, padx=4)
+        self._btn(leader_row, "Orange Brake", self._on_orange_brake, "orange_brake").pack(side=tk.LEFT, padx=4)
         self._btn(leader_row, "Red Brake", self._on_red_brake, "danger").pack(side=tk.LEFT, padx=4)
-        self._btn(leader_row, "FORT Brake", self._on_fort_brake, "danger").pack(side=tk.LEFT, padx=4)
+        self._btn(leader_row, "FORT Brake", self._on_fort_brake, "fort_brake").pack(side=tk.LEFT, padx=4)
         ttk.Separator(leader_row, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
         self._back_to_sim_btn = self._btn(leader_row, "Back to Sim", self._on_back_to_sim, "utility")
         self._back_to_sim_btn.pack(side=tk.LEFT, padx=4)
@@ -661,6 +708,9 @@ class OnlineVisualizationWindow:
         self._save_as_btn = self._btn(leader_row, "Save As", self._on_save_as, "save")
         self._save_as_btn.pack(side=tk.LEFT, padx=4)
         self._save_as_btn.configure(state=tk.DISABLED)
+
+        # --- Braking info bar ---
+        self._build_braking_info_bar(self.window, orange_dist, red_dist, loss_dist, resume_dist)
 
         # --- PanedWindow ---
         self.pane = tk.PanedWindow(self.window, orient=tk.VERTICAL, sashwidth=8, sashrelief=tk.RAISED, showhandle=True)
@@ -721,12 +771,7 @@ class OnlineVisualizationWindow:
 
     def set_rows(self, rows: tuple[SimulationRow, ...]) -> None:
         self.rows = list(rows)
-        max_time = rows[-1].time_s if rows else 0.0
-        self.time_scale.configure(to=max_time)
-        self.visualization.set_rows(rows, self.truck_length_m)
-        self.gap12_chart.set_rows(rows)
-        self.gap23_chart.set_rows(rows)
-        self.velocity_chart.set_rows(rows)
+        self._update_charts_data()
         self.draw_frame(0)
 
     def play(self) -> None:
@@ -766,14 +811,9 @@ class OnlineVisualizationWindow:
             return
         self.current_frame_index = max(0, min(index, len(self.rows) - 1))
         row = self.rows[self.current_frame_index]
-        rows_tuple = tuple(self.rows)
-        self.visualization.set_rows(rows_tuple, self.truck_length_m)
         self.visualization.draw_frame(self.current_frame_index)
-        self.gap12_chart.set_rows(rows_tuple)
         self.gap12_chart.draw(self.current_frame_index)
-        self.gap23_chart.set_rows(rows_tuple)
         self.gap23_chart.draw(self.current_frame_index)
-        self.velocity_chart.set_rows(rows_tuple)
         self.velocity_chart.draw(self.current_frame_index)
         self.time_label_var.set(f"Time: {row.time_s:.1f}s")
         self._updating_time_scale = True
@@ -788,6 +828,7 @@ class OnlineVisualizationWindow:
             if new_rows:
                 self._live_rows.extend(new_rows)
                 self.rows.extend(new_rows)
+                self._update_charts_data()
                 self.draw_frame(len(self.rows) - 1)
                 self._save_as_btn.configure(state=tk.NORMAL)
         else:
@@ -822,6 +863,7 @@ class OnlineVisualizationWindow:
                 if not self._live_rows:
                     self._save_as_btn.configure(state=tk.DISABLED)
                     self._back_to_sim_btn.configure(state=tk.DISABLED)
+                self._update_charts_data()
                 self.draw_frame(len(self.rows) - 1)
         else:
             current_time = self.rows[self.current_frame_index].time_s if self.rows else 0.0
@@ -834,6 +876,7 @@ class OnlineVisualizationWindow:
             if new_rows:
                 self._live_rows.extend(new_rows)
                 self.rows.extend(new_rows)
+                self._update_charts_data()
                 self.draw_frame(len(self.rows) - 1)
                 self._save_as_btn.configure(state=tk.NORMAL)
         else:
@@ -868,6 +911,9 @@ class OnlineVisualizationWindow:
                 braking,
                 current_time,
             )
+            # Truncate stale pre-calculated rows beyond the live-entry point
+            self.rows = self.rows[:self._live_entry_index + 1]
+            self._update_charts_data()
             self._live_mode = True
             self._back_to_sim_btn.configure(state=tk.NORMAL)
             return True
@@ -884,6 +930,7 @@ class OnlineVisualizationWindow:
         if new_rows:
             self._live_rows.extend(new_rows)
             self.rows.extend(new_rows)
+            self._update_charts_data()
             self.draw_frame(len(self.rows) - 1)
             self._save_as_btn.configure(state=tk.NORMAL)
 
@@ -918,13 +965,14 @@ class OnlineVisualizationWindow:
 
     def _on_back_to_sim(self) -> None:
         self.pause()
-        self.rows = self.rows[:self._live_entry_index + 1]
+        self.rows = list(self._original_rows)  # restore full original timeline
         self._live_rows = []
         self._live_stepper = None
         self._live_mode = False
         self._save_as_btn.configure(state=tk.DISABLED)
         self._back_to_sim_btn.configure(state=tk.DISABLED)
-        self.draw_frame(self._live_entry_index)
+        self._update_charts_data()
+        self.draw_frame(self._live_entry_index)  # position at the intervention point
 
     def _on_save_as(self) -> None:
         if not self._live_rows:
@@ -987,6 +1035,41 @@ class OnlineVisualizationWindow:
             tk.Label(item, text=text).pack(side=tk.LEFT, padx=4)
         return frame
 
+    def _build_braking_info_bar(
+        self,
+        parent: tk.Widget,
+        orange_dist: float | None,
+        red_dist: float | None,
+        loss_dist: float | None,
+        resume_dist: float | None,
+    ) -> None:
+        """Add a compact braking-parameters info bar above the visualization pane."""
+        bar = ttk.Frame(parent)
+        bar.pack(fill=tk.X, padx=8, pady=(0, 2))
+        if self._orange_braking_mode == 1:
+            orange_text = "Orange mode: TimeHeadway"
+        elif orange_dist is not None:
+            orange_text = f"Orange dist: {orange_dist:.1f} m"
+        else:
+            orange_text = "Orange: —"
+        red_text = f"Red dist: {red_dist:.1f} m" if red_dist is not None else "Red: —"
+        loss_text = f"ID loss: {loss_dist:.1f} m" if loss_dist is not None else "ID loss: —"
+        resume_text = f"ID resume: {resume_dist:.1f} m" if resume_dist is not None else "ID resume: —"
+        tk.Label(bar, text=orange_text, fg="#d77a00", font=("Arial", 9, "bold")).pack(side=tk.LEFT, padx=(0, 14))
+        tk.Label(bar, text=red_text, fg="#b00020", font=("Arial", 9, "bold")).pack(side=tk.LEFT, padx=(0, 14))
+        tk.Label(bar, text=loss_text, fg="#444", font=("Arial", 9)).pack(side=tk.LEFT, padx=(0, 14))
+        tk.Label(bar, text=resume_text, fg="#444", font=("Arial", 9)).pack(side=tk.LEFT)
+
+    def _update_charts_data(self) -> None:
+        """Update all canvas/chart data when self.rows changes. Call once after row list mutation."""
+        rows_tuple = tuple(self.rows)
+        self.visualization.set_rows(rows_tuple, self.truck_length_m)
+        self.gap12_chart.set_rows(rows_tuple)
+        self.gap23_chart.set_rows(rows_tuple)
+        self.velocity_chart.set_rows(rows_tuple)
+        max_time = rows_tuple[-1].time_s if rows_tuple else 0.0
+        self.time_scale.configure(to=max_time)
+
     def _btn(
         self,
         parent: tk.Widget,
@@ -1000,7 +1083,9 @@ class OnlineVisualizationWindow:
             "primary": ("#1565c0", "#ffffff"),
             "view": ("#5e35b1", "#ffffff"),
             "save": ("#2e7d32", "#ffffff"),
-            "edit": ("#ef6c00", "#ffffff"),
+            "decelerate": ("#4527a0", "#ffffff"),
+            "orange_brake": ("#d77a00", "#ffffff"),
+            "fort_brake": ("#111111", "#ffffff"),
             "danger": ("#b00020", "#ffffff"),
             "play": ("#00897b", "#ffffff"),
             "utility": ("#546e7a", "#ffffff"),
@@ -1178,6 +1263,10 @@ class ConvoySimGui(tk.Tk):
         self.show_bulk_results_button.pack(side=tk.LEFT, padx=4)
         self.status_label = tk.Label(controls, textvariable=self.status_var, anchor="w", fg="#555")
         self.status_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(16, 4))
+        tk.Button(
+            controls, text="Copy", command=self._copy_status_to_clipboard,
+            bg="#90a4ae", fg="#111", relief=tk.RAISED, bd=1, padx=6, pady=1, font=("Arial", 8),
+        ).pack(side=tk.RIGHT, padx=(0, 4))
         tk.Label(self, textvariable=self.loaded_scenario_label_var, anchor="w", font=("Arial", 10, "bold"), fg="#333").pack(
             fill=tk.X,
             padx=10,
@@ -1316,6 +1405,12 @@ class ConvoySimGui(tk.Tk):
             "error": "#b00020",
         }
         self.status_label.configure(fg=color_by_level.get(level, "#555555"))
+
+    def _copy_status_to_clipboard(self) -> None:
+        text = self.status_var.get().strip()
+        if text and text != "Ready.":
+            self.clipboard_clear()
+            self.clipboard_append(text)
 
     def _configure_tab_selector_style(self, notebook: ttk.Notebook) -> None:
         style = ttk.Style(notebook)
@@ -2613,6 +2708,7 @@ class ConvoySimGui(tk.Tk):
         ).pack(side=tk.LEFT, padx=4)
 
         orange_distance_m, red_distance_m, loss_distance_m, resume_distance_m = self._visualization_distances()
+        self._add_braking_info_bar(self.visualization_window, orange_distance_m, red_distance_m, loss_distance_m, resume_distance_m)
         self.visualization_pane = tk.PanedWindow(
             self.visualization_window,
             orient=tk.VERTICAL,
@@ -2930,6 +3026,37 @@ class ConvoySimGui(tk.Tk):
             )
         except (FileNotFoundError, ValueError):
             return None, None, None, None
+
+    def _add_braking_info_bar(
+        self,
+        parent: tk.Widget,
+        orange_dist: float | None,
+        red_dist: float | None,
+        loss_dist: float | None,
+        resume_dist: float | None,
+    ) -> None:
+        """Add a compact braking-parameters info bar to a visualization window."""
+        orange_braking_mode = 0
+        try:
+            p = load_parameters_csv(self.parameters_path.get()).simulation_parameters
+            orange_braking_mode = p.orange_braking_mode
+        except Exception:  # noqa: BLE001
+            pass
+        bar = ttk.Frame(parent)
+        bar.pack(fill=tk.X, padx=8, pady=(0, 2))
+        if orange_braking_mode == 1:
+            orange_text = "Orange mode: TimeHeadway"
+        elif orange_dist is not None:
+            orange_text = f"Orange dist: {orange_dist:.1f} m"
+        else:
+            orange_text = "Orange: —"
+        red_text = f"Red dist: {red_dist:.1f} m" if red_dist is not None else "Red: —"
+        loss_text = f"ID loss: {loss_dist:.1f} m" if loss_dist is not None else "ID loss: —"
+        resume_text = f"ID resume: {resume_dist:.1f} m" if resume_dist is not None else "ID resume: —"
+        tk.Label(bar, text=orange_text, fg="#d77a00", font=("Arial", 9, "bold")).pack(side=tk.LEFT, padx=(0, 14))
+        tk.Label(bar, text=red_text, fg="#b00020", font=("Arial", 9, "bold")).pack(side=tk.LEFT, padx=(0, 14))
+        tk.Label(bar, text=loss_text, fg="#444", font=("Arial", 9)).pack(side=tk.LEFT, padx=(0, 14))
+        tk.Label(bar, text=resume_text, fg="#444", font=("Arial", 9)).pack(side=tk.LEFT)
 
     def play_visualization(self) -> None:
         if not self.visualization_rows:
