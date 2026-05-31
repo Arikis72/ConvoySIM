@@ -16,3 +16,16 @@ related: ["[[AGENTS]]"]
 **Do not begin any task, plan, or edit until you have read `AGENTS.md` in full.**
 
 This file contains no rules. It only points you to `AGENTS.md`.
+
+---
+
+## Repository & Access
+
+**GitHub Repository:** https://github.com/Arikis72/ConvoySIM
+
+**GitHub Account:** `Arikis72`
+
+**Authentication:**
+- Method: Google OAuth
+- Email: arikilogin@gmail.com
+- Access: Public repository

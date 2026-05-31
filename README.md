@@ -9,6 +9,8 @@ related: ["[[AGENTS]]", "[[SimRequirements]]", "[[STATUS]]", "[[docs/feature_gui
 
 # ConvoySIM
 
+**Repository:** https://github.com/Arikis72/ConvoySIM
+
 > Full feature reference: [[docs/feature_guide]] · Behavior spec: [[SimRequirements]] · Agent contract: [[AGENTS]] · Current state: [[STATUS]]
 
 ConvoySIM simulates a 3-truck convoy (Truck #1 leader + Trucks #2–#3 followers) with image-identification loss/resume, communication logic, orange/red braking, FORT, SAFETY_LOCK, and Stage B parameter optimization.
