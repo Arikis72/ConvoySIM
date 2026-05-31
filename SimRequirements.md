@@ -900,6 +900,12 @@ Output review behavior:
 - Stage C popup and Bulk visualization popup legend (Toggle Legend) shall always be fully visible when shown. It shall be packed above the visualization pane so that it takes space from the pane rather than being obscured by it on small screens.
 - The Stage C "status / command / violation" rotated Y-axis label shall remain within the visible canvas area at all supported canvas heights.
 - Stage C popup and Bulk visualization popup shall support keyboard shortcuts: left arrow = jump back 1 second, right arrow = jump forward 1 second, Home = jump to simulation start, End = jump to simulation end.
+- An "Open Online Visualization" button shall open a dedicated popup (separate from Stage C) that allows live leader control. This popup replays the pre-calculated simulation and allows the user to take over the leader at any pause point. The existing "Open Visualization" popup is unchanged.
+- The Online Visualization popup shall include a leader control row with: Pause/Resume, Accelerate (with editable rate field), Decelerate (with editable rate field), Orange Brake, Red Brake, FORT Brake, Back to Sim, and Save As buttons. The control row is always visible (not toggled).
+- In the Online Visualization: each leader control button click advances the simulation exactly 1 simulated second with the given command. Multiple rapid clicks stack (3× Accelerate = 3 seconds of acceleration queued). Default Accelerate rate = `max_acceleration_mps2`; default Decelerate rate = `orange_deceleration_mps2`.
+- In the Online Visualization: keyboard left arrow undoes the last 1-second live step; keyboard right arrow advances 1 second with HOLD (leader maintains velocity). Play auto-advances with HOLD at the playback speed.
+- In the Online Visualization: "Back to Sim" discards all live steps and returns the visualization to the pre-calculated rows at the moment live control was activated.
+- In the Online Visualization: "Save As" saves a merged scenario CSV — original rows up to the live-entry time, then live rows with the updated leader velocities; Trucks 2 and 3 image events from the original scenario are preserved. The default save name is `<original_name>_Ver1.csv` (auto-incrementing). After save, the new scenario is loaded into the Scenario tab with an inline notification.
 
 The log window shall report:
 

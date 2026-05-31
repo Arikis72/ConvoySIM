@@ -25,7 +25,7 @@ related: ["[[AGENTS]]", "[[requirements_traceability]]", "[[known_issues]]", "[[
 
 **Test suite:** Last run 2026-05-31 — 93 tests; 4 failures + 32 errors are pre-existing (missing `Inputs/stage_a_example_inputs/parameters.csv` and `braking_distance_table.csv` — path mismatch in test fixtures, not introduced by this session). No new failures. See `test_strategy.md` for module coverage.
 
-**Requirements:** See `requirements_traceability.md` for REQ ID status. Open items: REQ-25 (leader resume after comms override — frozen by user decision; true pause/stop for real-time mode). REQ-21-07 through REQ-21-13 added and implemented this session.
+**Requirements:** See `requirements_traceability.md` for REQ ID status. Open items: REQ-25 (leader resume after comms override — frozen; true pause/stop for real-time mode). REQ-21-07 through REQ-21-14 added and implemented this session. REQ-21-14 pending manual UI/UX review.
 
 ---
 

@@ -19,6 +19,7 @@ related: ["[[AGENTS]]", "[[requirements_traceability]]", "[[known_issues]]", "[[
 - [ ] Review `SimRequirements.md` §25 and extract the open questions to the `requirements_traceability.md` Open Questions block.
 - [ ] Define exact leader resume behavior after communication override (REQ-25-01 — needs user input).
 - [ ] Implement true pause/stop controls for long-running/real-time simulation mode (REQ-25-02 — needs user scoping).
+- [ ] Manual UI/UX review of Online Visualization popup: test all leader control buttons, undo, Save As, Back to Sim (REQ-21-14).
 - [ ] Add additional Stage B cost functions for safety violations, full stops, and oscillations.
 - [ ] Consider multi-parameter Stage B optimization after single-parameter bulk simulation performance is reviewed.
 

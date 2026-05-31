@@ -41,6 +41,17 @@ from convoysim.optimization import (
     load_cost_function_weights_csv,
     run_bulk_simulations_from_files,
 )
+from convoysim.braking import BrakingDistanceTable
+from convoysim.live_stepper import (
+    FORT_BRAKE,
+    HOLD,
+    ORANGE_BRAKE,
+    RED_BRAKE,
+    LiveLeaderCommand,
+    LiveSimStepper,
+    accelerate,
+    decelerate,
+)
 from convoysim.parameters import load_parameters_csv
 from convoysim.run_config import (
     StageARunConfig,
@@ -49,6 +60,7 @@ from convoysim.run_config import (
     save_stage_a_run_config,
     timestamped_stage_a_paths,
 )
+from convoysim.scenario_timeline import ScenarioTimeline
 from convoysim.simulation import SimulationRow, run_basic_simulation_from_files
 from convoysim.visualization import (
     CHART_LEFT_PX,
@@ -454,6 +466,561 @@ class BulkVisualizationWindow:
         self.window.destroy()
 
 
+# ---------------------------------------------------------------------------
+# Online Visualization — live leader-control popup
+# ---------------------------------------------------------------------------
+
+def _next_version_name(scenario_path: str) -> str:
+    """Return <stem>_Ver<N+1>.csv where N is the highest existing _VerN suffix."""
+    path = Path(scenario_path)
+    stem = path.stem
+    parent = path.parent
+    existing = [p.stem for p in parent.glob(f"{stem}_Ver*.csv")]
+    max_n = 0
+    for name in existing:
+        suffix = name[len(stem) + 4:]  # strip "<stem>_Ver"
+        if suffix.isdigit():
+            max_n = max(max_n, int(suffix))
+    return str(parent / f"{stem}_Ver{max_n + 1}.csv")
+
+
+def _save_online_scenario(
+    scenario_path: str,
+    live_entry_time_s: float,
+    live_rows: tuple[SimulationRow, ...],
+    save_path: str,
+) -> None:
+    """Write a merged scenario CSV: original rows up to live_entry_time,
+    then live rows (leader velocity from simulation; Trucks 2/3 events from original)."""
+    timeline = ScenarioTimeline.from_csv(scenario_path)
+
+    # Build lookup: time → (truck1_event, truck2_event, truck3_event)
+    t1_events = {e.time_s: e.event.value for e in timeline.truck1_events()}
+    t2_events = {e.time_s: e.event.value for e in timeline.truck2_image_events()}
+    t3_events = {e.time_s: e.event.value for e in timeline.truck3_image_events()}
+
+    # Collect original rows up to the live-entry boundary
+    original_rows = [
+        row for row in timeline.rows
+        if row.time_s <= live_entry_time_s + 1e-9
+    ]
+
+    output_path = Path(save_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow(["Time_s", "Truck1_Velocity_kph", "Truck1_Event", "Truck2_Image_Event", "Truck3_Image_Event", "Notes"])
+        for row in original_rows:
+            writer.writerow([
+                f"{row.time_s:.3f}",
+                f"{row.truck1_velocity_kph:.3f}" if row.truck1_velocity_kph is not None else "",
+                row.truck1_event.value if row.truck1_event is not None else "",
+                row.truck2_image_event.value if row.truck2_image_event is not None else "",
+                row.truck3_image_event.value if row.truck3_image_event is not None else "",
+                row.notes,
+            ])
+        # Append live-controlled rows
+        for live_row in live_rows:
+            t = round(live_row.time_s, 10)
+            writer.writerow([
+                f"{live_row.time_s:.3f}",
+                f"{live_row.truck1_velocity_kph:.3f}",
+                t1_events.get(t, ""),
+                t2_events.get(t, ""),
+                t3_events.get(t, ""),
+                "",
+            ])
+
+
+class OnlineVisualizationWindow:
+    """Stage C visualization popup with live leader-control panel.
+
+    Replays pre-calculated rows exactly like BulkVisualizationWindow, then
+    lets the user take over the leader at any point via the control row.
+    No code from open_visualization_window() or BulkVisualizationWindow is
+    modified — this class is entirely standalone.
+    """
+
+    def __init__(
+        self,
+        parent: "ConvoySimGui",
+        header: str,
+        rows: tuple[SimulationRow, ...],
+        parameters_path: str,
+        scenario_path: str,
+        braking_table_path: str,
+        distances: tuple[float | None, float | None, float | None, float | None],
+        truck_length_m: float,
+        playback_speed: float,
+        on_close: object | None = None,
+    ) -> None:
+        self.parent = parent
+        self.rows: list[SimulationRow] = list(rows)
+        self._parameters_path = parameters_path
+        self._scenario_path = scenario_path
+        self._braking_table_path = braking_table_path
+        self.truck_length_m = truck_length_m
+        self.on_close = on_close
+
+        # Live-mode state
+        self._live_mode = False
+        self._live_stepper: LiveSimStepper | None = None
+        self._live_entry_index = 0
+        self._live_rows: list[SimulationRow] = []
+        self._steps_per_second = 10  # overridden after parameters load
+
+        self.current_frame_index = 0
+        self.is_playing = False
+        self.playback_after_id: str | None = None
+        self._updating_time_scale = False
+
+        self.time_var = tk.DoubleVar(value=0.0)
+        self.time_label_var = tk.StringVar(value="Time: 0.0s")
+        self.playback_speed_var = tk.DoubleVar(value=playback_speed)
+        self.playback_speed_label_var = tk.StringVar(value=f"Speed: x{playback_speed:.1f}")
+        self.show_gap_chart_var = tk.BooleanVar(value=True)
+        self.show_velocity_chart_var = tk.BooleanVar(value=True)
+        self._accel_rate_var = tk.StringVar(value="1.0")
+        self._decel_rate_var = tk.StringVar(value="1.0")
+        self._pause_btn_text = tk.StringVar(value="Pause")
+
+        self.window = tk.Toplevel(parent)
+        self.window.title("ConvoySIM Online Visualization")
+        self.window.geometry("1280x900")
+        self.window.minsize(1000, 760)
+        self.window.protocol("WM_DELETE_WINDOW", self.close)
+
+        # Load parameters to populate default rate fields
+        try:
+            loaded = load_parameters_csv(parameters_path)
+            p = loaded.simulation_parameters
+            self._accel_rate_var.set(f"{p.max_acceleration_mps2:.2f}")
+            self._decel_rate_var.set(f"{p.orange_deceleration_mps2:.2f}")
+            self._steps_per_second = max(1, round(1.0 / p.simulation_time_step_s))
+        except Exception:  # noqa: BLE001
+            pass
+
+        orange_dist, red_dist, loss_dist, resume_dist = distances
+        self._build_window(header, orange_dist, red_dist, loss_dist, resume_dist)
+        self.set_rows(tuple(rows))
+
+    # ------------------------------------------------------------------
+    # Window construction
+    # ------------------------------------------------------------------
+
+    def _build_window(
+        self,
+        header: str,
+        orange_dist: float | None,
+        red_dist: float | None,
+        loss_dist: float | None,
+        resume_dist: float | None,
+    ) -> None:
+        tk.Label(
+            self.window, text=header, anchor="w",
+            font=("Arial", 11, "bold"), fg="#333",
+        ).pack(fill=tk.X, padx=8, pady=(6, 0))
+
+        # --- Playback controls row ---
+        controls = ttk.Frame(self.window)
+        controls.pack(fill=tk.X, padx=6, pady=4)
+        self._btn(controls, ">", self.play, "play").pack(side=tk.LEFT, padx=4)
+        self._btn(controls, "||", self.pause, "play").pack(side=tk.LEFT, padx=4)
+        self._btn(controls, "[]", self.stop, "danger").pack(side=tk.LEFT, padx=4)
+        self._btn(controls, "<<", self.step_back, "utility").pack(side=tk.LEFT, padx=4)
+        self._btn(controls, ">>", self.step_forward, "utility").pack(side=tk.LEFT, padx=4)
+        self._btn(controls, "Toggle Legend", self._toggle_legend, "view").pack(side=tk.LEFT, padx=4)
+        ttk.Checkbutton(controls, text="Gap charts", variable=self.show_gap_chart_var, command=self._apply_chart_visibility).pack(side=tk.LEFT, padx=(12, 2))
+        ttk.Checkbutton(controls, text="Velocity chart", variable=self.show_velocity_chart_var, command=self._apply_chart_visibility).pack(side=tk.LEFT, padx=2)
+        ttk.Label(controls, textvariable=self.time_label_var).pack(side=tk.LEFT, padx=12)
+        ttk.Label(controls, textvariable=self.playback_speed_label_var).pack(side=tk.LEFT, padx=(16, 4))
+        ttk.Scale(controls, from_=0.3, to=2.0, orient=tk.HORIZONTAL, variable=self.playback_speed_var,
+                  command=self._on_speed_changed, length=160).pack(side=tk.LEFT, padx=4)
+
+        # --- Leader control row (always visible) ---
+        leader_row = ttk.LabelFrame(self.window, text="Control the leader")
+        leader_row.pack(fill=tk.X, padx=6, pady=(0, 2))
+
+        self._btn(leader_row, "Pause", self._on_leader_pause, "play", text_var=self._pause_btn_text).pack(side=tk.LEFT, padx=4)
+        ttk.Separator(leader_row, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
+        self._btn(leader_row, "Accelerate", self._on_accelerate, "primary").pack(side=tk.LEFT, padx=(4, 2))
+        ttk.Entry(leader_row, textvariable=self._accel_rate_var, width=6).pack(side=tk.LEFT, padx=(0, 2))
+        ttk.Label(leader_row, text="m/s²").pack(side=tk.LEFT)
+        ttk.Separator(leader_row, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
+        self._btn(leader_row, "Decelerate", self._on_decelerate, "edit").pack(side=tk.LEFT, padx=(4, 2))
+        ttk.Entry(leader_row, textvariable=self._decel_rate_var, width=6).pack(side=tk.LEFT, padx=(0, 2))
+        ttk.Label(leader_row, text="m/s²").pack(side=tk.LEFT)
+        ttk.Separator(leader_row, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
+        self._btn(leader_row, "Orange Brake", self._on_orange_brake, "edit").pack(side=tk.LEFT, padx=4)
+        self._btn(leader_row, "Red Brake", self._on_red_brake, "danger").pack(side=tk.LEFT, padx=4)
+        self._btn(leader_row, "FORT Brake", self._on_fort_brake, "danger").pack(side=tk.LEFT, padx=4)
+        ttk.Separator(leader_row, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
+        self._back_to_sim_btn = self._btn(leader_row, "Back to Sim", self._on_back_to_sim, "utility")
+        self._back_to_sim_btn.pack(side=tk.LEFT, padx=4)
+        self._back_to_sim_btn.configure(state=tk.DISABLED)
+        self._save_as_btn = self._btn(leader_row, "Save As", self._on_save_as, "save")
+        self._save_as_btn.pack(side=tk.LEFT, padx=4)
+        self._save_as_btn.configure(state=tk.DISABLED)
+
+        # --- PanedWindow ---
+        self.pane = tk.PanedWindow(self.window, orient=tk.VERTICAL, sashwidth=8, sashrelief=tk.RAISED, showhandle=True)
+        self.pane.pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 6))
+        viz_frame = ttk.Frame(self.pane)
+        charts_frame = ttk.Frame(self.pane)
+        self.pane.add(viz_frame, minsize=280)
+        self.pane.add(charts_frame, minsize=180)
+
+        self.visualization = ConvoyPlaybackCanvas(
+            viz_frame, width=1220, height=360,
+            orange_distance_m=orange_dist, red_distance_m=red_dist,
+            loss_distance_m=loss_dist, resume_distance_m=resume_dist,
+        )
+        self.gap12_chart = ConvoyTimelineChart(
+            charts_frame, title="Gap1-2 vs Time", y_label="Gap (m)",
+            series=(ChartSeries("Gap1-2", truck_color_for_label(1), lambda row: row.truck2_gap_m,
+                                segment_style_for_rows=lambda s, e: follower_chart_segment_style("Truck2", s, e)),),
+            width=1220, height=120, y_max_cap=40.0,
+        )
+        self.gap23_chart = ConvoyTimelineChart(
+            charts_frame, title="Gap2-3 vs Time", y_label="Gap (m)",
+            series=(ChartSeries("Gap2-3", truck_color_for_label(0), lambda row: row.truck3_gap_m,
+                                segment_style_for_rows=lambda s, e: follower_chart_segment_style("Truck3", s, e)),),
+            width=1220, height=120, y_max_cap=40.0,
+        )
+        self.velocity_chart = ConvoyTimelineChart(
+            charts_frame, title="Velocity vs Time", y_label="Velocity (kph)",
+            series=(
+                ChartSeries("Truck1", "#333333", lambda row: row.truck1_velocity_kph),
+                ChartSeries("Truck2", truck_color_for_label(1), lambda row: row.truck2_velocity_kph,
+                            segment_style_for_rows=lambda s, e: follower_chart_segment_style("Truck2", s, e, default_dashed_for_truck2=True)),
+                ChartSeries("Truck3", truck_color_for_label(0), lambda row: row.truck3_velocity_kph,
+                            segment_style_for_rows=lambda s, e: follower_chart_segment_style("Truck3", s, e)),
+            ),
+            width=1220, height=120,
+        )
+        self.time_scale = ttk.Scale(
+            charts_frame, from_=0.0, to=0.0, orient=tk.HORIZONTAL,
+            variable=self.time_var, command=self._on_time_scale_changed,
+        )
+        self.time_scale.pack(fill=tk.X, padx=(int(CHART_LEFT_PX), int(CHART_RIGHT_MARGIN_PX)), pady=(6, 8))
+        self._apply_chart_visibility()
+
+        # Legend above pane
+        self._legend_frame = self._build_legend(self.window)
+        self._legend_frame.pack(fill=tk.X, padx=8, pady=(0, 4), before=self.pane)
+
+        # Keyboard shortcuts
+        self.window.bind("<Left>", lambda _e: self._keyboard_back())
+        self.window.bind("<Right>", lambda _e: self._keyboard_forward())
+        self.window.bind("<Home>", lambda _e: self.stop())
+        self.window.bind("<End>", lambda _e: self._keyboard_end())
+
+    # ------------------------------------------------------------------
+    # Playback (pre-calculated mode — identical to BulkVisualizationWindow)
+    # ------------------------------------------------------------------
+
+    def set_rows(self, rows: tuple[SimulationRow, ...]) -> None:
+        self.rows = list(rows)
+        max_time = rows[-1].time_s if rows else 0.0
+        self.time_scale.configure(to=max_time)
+        self.visualization.set_rows(rows, self.truck_length_m)
+        self.gap12_chart.set_rows(rows)
+        self.gap23_chart.set_rows(rows)
+        self.velocity_chart.set_rows(rows)
+        self.draw_frame(0)
+
+    def play(self) -> None:
+        if not self.rows:
+            return
+        self.is_playing = True
+        self._pause_btn_text.set("Pause")
+        self._schedule_next_frame()
+
+    def pause(self) -> None:
+        self.is_playing = False
+        self._pause_btn_text.set("Resume")
+        if self.playback_after_id is not None:
+            self.window.after_cancel(self.playback_after_id)
+            self.playback_after_id = None
+
+    def stop(self) -> None:
+        self.pause()
+        self.draw_frame(0)
+
+    def step_back(self) -> None:
+        self.pause()
+        self._keyboard_back()
+
+    def step_forward(self) -> None:
+        self.pause()
+        self._keyboard_forward()
+
+    def draw_frame(self, index: int) -> None:
+        if not self.rows:
+            self.current_frame_index = 0
+            self.time_label_var.set("Time: 0.0s")
+            self.visualization.draw_frame(0)
+            self.gap12_chart.draw(0)
+            self.gap23_chart.draw(0)
+            self.velocity_chart.draw(0)
+            return
+        self.current_frame_index = max(0, min(index, len(self.rows) - 1))
+        row = self.rows[self.current_frame_index]
+        rows_tuple = tuple(self.rows)
+        self.visualization.set_rows(rows_tuple, self.truck_length_m)
+        self.visualization.draw_frame(self.current_frame_index)
+        self.gap12_chart.set_rows(rows_tuple)
+        self.gap12_chart.draw(self.current_frame_index)
+        self.gap23_chart.set_rows(rows_tuple)
+        self.gap23_chart.draw(self.current_frame_index)
+        self.velocity_chart.set_rows(rows_tuple)
+        self.velocity_chart.draw(self.current_frame_index)
+        self.time_label_var.set(f"Time: {row.time_s:.1f}s")
+        self._updating_time_scale = True
+        self.time_var.set(row.time_s)
+        self._updating_time_scale = False
+
+    def _schedule_next_frame(self) -> None:
+        if not self.is_playing:
+            return
+        if self._live_mode and self._live_stepper is not None:
+            new_rows = self._live_stepper.advance_one_second(HOLD)
+            if new_rows:
+                self._live_rows.extend(new_rows)
+                self.rows.extend(new_rows)
+                self.draw_frame(len(self.rows) - 1)
+                self._save_as_btn.configure(state=tk.NORMAL)
+        else:
+            if self.current_frame_index >= len(self.rows) - 1:
+                self.pause()
+                return
+            self.draw_frame(self.current_frame_index + 1)
+        self.playback_after_id = self.window.after(
+            playback_delay_ms(self.playback_speed_var.get()), self._schedule_next_frame
+        )
+
+    def _on_time_scale_changed(self, value: str) -> None:
+        if self._updating_time_scale or not self.rows:
+            return
+        self.pause()
+        self.draw_frame(nearest_row_index(tuple(self.rows), float(value)))
+
+    def _on_speed_changed(self, value: str) -> None:
+        self.playback_speed_label_var.set(f"Speed: x{float(value):.1f}")
+
+    # ------------------------------------------------------------------
+    # Keyboard shortcuts
+    # ------------------------------------------------------------------
+
+    def _keyboard_back(self) -> None:
+        self.pause()
+        if self._live_mode and self._live_stepper is not None and self._live_stepper.can_undo:
+            if self._live_stepper.undo_one_second():
+                n = self._steps_per_second
+                self._live_rows = self._live_rows[:-n]
+                self.rows = self.rows[:self._live_entry_index + 1 + len(self._live_rows)]
+                if not self._live_rows:
+                    self._save_as_btn.configure(state=tk.DISABLED)
+                    self._back_to_sim_btn.configure(state=tk.DISABLED)
+                self.draw_frame(len(self.rows) - 1)
+        else:
+            current_time = self.rows[self.current_frame_index].time_s if self.rows else 0.0
+            self.draw_frame(nearest_row_index(tuple(self.rows), current_time - 1.0))
+
+    def _keyboard_forward(self) -> None:
+        self.pause()
+        if self._live_mode and self._live_stepper is not None:
+            new_rows = self._live_stepper.advance_one_second(HOLD)
+            if new_rows:
+                self._live_rows.extend(new_rows)
+                self.rows.extend(new_rows)
+                self.draw_frame(len(self.rows) - 1)
+                self._save_as_btn.configure(state=tk.NORMAL)
+        else:
+            current_time = self.rows[self.current_frame_index].time_s if self.rows else 0.0
+            self.draw_frame(nearest_row_index(tuple(self.rows), current_time + 1.0))
+
+    def _keyboard_end(self) -> None:
+        self.pause()
+        if self.rows:
+            self.draw_frame(len(self.rows) - 1)
+
+    # ------------------------------------------------------------------
+    # Leader control
+    # ------------------------------------------------------------------
+
+    def _ensure_live_mode(self) -> bool:
+        """Activate live mode from current frame.  Returns False if setup fails."""
+        if self._live_mode:
+            return True
+        self.pause()
+        try:
+            loaded = load_parameters_csv(self._parameters_path)
+            timeline = ScenarioTimeline.from_csv(self._scenario_path)
+            braking = BrakingDistanceTable.from_csv(self._braking_table_path) if self._braking_table_path else None
+            current_time = self.rows[self.current_frame_index].time_s if self.rows else 0.0
+            self._live_entry_index = self.current_frame_index
+            self._steps_per_second = max(1, round(1.0 / loaded.simulation_parameters.simulation_time_step_s))
+            self._live_stepper = LiveSimStepper(
+                loaded.initial_conditions,
+                loaded.simulation_parameters,
+                timeline,
+                braking,
+                current_time,
+            )
+            self._live_mode = True
+            self._back_to_sim_btn.configure(state=tk.NORMAL)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            self.parent._set_status(f"Live mode setup failed: {exc}", "error")
+            return False
+
+    def _apply_leader_command(self, command: LiveLeaderCommand) -> None:
+        self.pause()
+        if not self._ensure_live_mode():
+            return
+        assert self._live_stepper is not None
+        new_rows = self._live_stepper.advance_one_second(command)
+        if new_rows:
+            self._live_rows.extend(new_rows)
+            self.rows.extend(new_rows)
+            self.draw_frame(len(self.rows) - 1)
+            self._save_as_btn.configure(state=tk.NORMAL)
+
+    def _on_accelerate(self) -> None:
+        try:
+            rate = float(self._accel_rate_var.get())
+        except ValueError:
+            return
+        self._apply_leader_command(accelerate(rate))
+
+    def _on_decelerate(self) -> None:
+        try:
+            rate = float(self._decel_rate_var.get())
+        except ValueError:
+            return
+        self._apply_leader_command(decelerate(rate))
+
+    def _on_orange_brake(self) -> None:
+        self._apply_leader_command(ORANGE_BRAKE)
+
+    def _on_red_brake(self) -> None:
+        self._apply_leader_command(RED_BRAKE)
+
+    def _on_fort_brake(self) -> None:
+        self._apply_leader_command(FORT_BRAKE)
+
+    def _on_leader_pause(self) -> None:
+        if self.is_playing:
+            self.pause()
+        else:
+            self.play()
+
+    def _on_back_to_sim(self) -> None:
+        self.pause()
+        self.rows = self.rows[:self._live_entry_index + 1]
+        self._live_rows = []
+        self._live_stepper = None
+        self._live_mode = False
+        self._save_as_btn.configure(state=tk.DISABLED)
+        self._back_to_sim_btn.configure(state=tk.DISABLED)
+        self.draw_frame(self._live_entry_index)
+
+    def _on_save_as(self) -> None:
+        if not self._live_rows:
+            return
+        initial_path = _next_version_name(self._scenario_path)
+        save_path = filedialog.asksaveasfilename(
+            initialfile=Path(initial_path).name,
+            initialdir=str(Path(initial_path).parent),
+            defaultextension=".csv",
+            filetypes=(("CSV files", "*.csv"), ("All files", "*.*")),
+        )
+        if not save_path:
+            return
+        try:
+            entry_time = self.rows[self._live_entry_index].time_s
+            _save_online_scenario(
+                self._scenario_path, entry_time, tuple(self._live_rows), save_path
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.parent._set_status(f"Save failed: {exc}", "error")
+            return
+        self.parent.scenario_path.set(save_path)
+        self.parent._set_status(f"Saved and loaded: {Path(save_path).name}", "success")
+
+    # ------------------------------------------------------------------
+    # UI helpers
+    # ------------------------------------------------------------------
+
+    def _apply_chart_visibility(self) -> None:
+        for chart in (self.gap12_chart, self.gap23_chart, self.velocity_chart):
+            chart.canvas.pack_forget()
+        if self.show_gap_chart_var.get():
+            self.gap12_chart.canvas.pack(fill=tk.BOTH, expand=True, before=self.time_scale)
+            self.gap23_chart.canvas.pack(fill=tk.BOTH, expand=True, before=self.time_scale)
+        if self.show_velocity_chart_var.get():
+            self.velocity_chart.canvas.pack(fill=tk.BOTH, expand=True, before=self.time_scale)
+
+    def _toggle_legend(self) -> None:
+        if self._legend_frame.winfo_ismapped():
+            self._legend_frame.pack_forget()
+        else:
+            self._legend_frame.pack(fill=tk.X, padx=8, pady=(0, 4), before=self.pane)
+
+    def _build_legend(self, parent: tk.Widget) -> ttk.Frame:
+        frame = ttk.Frame(parent)
+        items = (
+            ("Truck #1", truck_color_for_label(2), None, 4),
+            ("Truck #2 / Gap1-2", truck_color_for_label(1), None, 4),
+            ("Truck #3 / Gap2-3", truck_color_for_label(0), None, 4),
+            ("Image lost", truck_color_for_label(1), (5, 4), 3),
+            ("Orange braking", "#d77a00", None, 4),
+            ("Red braking / violation", "#b00020", None, 4),
+        )
+        for i, (text, color, dash, width) in enumerate(items):
+            item = tk.Frame(frame)
+            item.grid(row=0, column=i, sticky="w", padx=8, pady=3)
+            swatch = tk.Canvas(item, width=40, height=12, highlightthickness=0)
+            swatch.pack(side=tk.LEFT)
+            swatch.create_line(2, 6, 38, 6, fill=color, width=width, dash=dash)
+            tk.Label(item, text=text).pack(side=tk.LEFT, padx=4)
+        return frame
+
+    def _btn(
+        self,
+        parent: tk.Widget,
+        text: str,
+        command: object,
+        role: str,
+        width: int | None = None,
+        text_var: tk.StringVar | None = None,
+    ) -> tk.Button:
+        colors = {
+            "primary": ("#1565c0", "#ffffff"),
+            "view": ("#5e35b1", "#ffffff"),
+            "save": ("#2e7d32", "#ffffff"),
+            "edit": ("#ef6c00", "#ffffff"),
+            "danger": ("#b00020", "#ffffff"),
+            "play": ("#00897b", "#ffffff"),
+            "utility": ("#546e7a", "#ffffff"),
+        }
+        bg, fg = colors.get(role, colors["utility"])
+        kwargs: dict = dict(bg=bg, fg=fg, activebackground=bg, activeforeground=fg,
+                             disabledforeground="#dddddd", relief=tk.RAISED, bd=2, padx=6, pady=2)
+        if width is not None:
+            kwargs["width"] = width
+        if text_var is not None:
+            return tk.Button(parent, textvariable=text_var, command=command, **kwargs)
+        return tk.Button(parent, text=text, command=command, **kwargs)
+
+    def close(self) -> None:
+        self.pause()
+        if callable(self.on_close):
+            self.on_close(self)
+        self.window.destroy()
+
+
 class ConvoySimGui(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
@@ -530,7 +1097,9 @@ class ConvoySimGui(tk.Tk):
         self._bulk_cancel_requested = False
         self.open_visualization_button: tk.Button | None = None
         self.open_charts_button: tk.Button | None = None
+        self.open_online_visualization_button: tk.Button | None = None
         self.show_bulk_results_button: tk.Button | None = None
+        self._online_visualization_windows: list[OnlineVisualizationWindow] = []
         self.scenario_save_button: tk.Button | None = None
         self.scenario_save_as_button: tk.Button | None = None
         self._scenario_dirty = False
@@ -601,6 +1170,10 @@ class ConvoySimGui(tk.Tk):
         self.open_visualization_button.pack(side=tk.LEFT, padx=4)
         self.open_charts_button = self._colored_button(controls, "Open Charts", self.open_charts, "view")
         self.open_charts_button.pack(side=tk.LEFT, padx=4)
+        self.open_online_visualization_button = self._colored_button(
+            controls, "Open Online Visualization", self.open_online_visualization_window, "view"
+        )
+        self.open_online_visualization_button.pack(side=tk.LEFT, padx=4)
         self.show_bulk_results_button = self._colored_button(controls, "Show Bulk Results", self.show_bulk_results_window, "view")
         self.show_bulk_results_button.pack(side=tk.LEFT, padx=4)
         self.status_label = tk.Label(controls, textvariable=self.status_var, anchor="w", fg="#555")
@@ -1035,6 +1608,8 @@ class ConvoySimGui(tk.Tk):
             self.open_visualization_button.configure(state=tk.NORMAL if has_output_rows else tk.DISABLED)
         if self.open_charts_button is not None:
             self.open_charts_button.configure(state=tk.NORMAL if has_charts else tk.DISABLED)
+        if self.open_online_visualization_button is not None:
+            self.open_online_visualization_button.configure(state=tk.NORMAL if has_output_rows else tk.DISABLED)
         if self.show_bulk_results_button is not None:
             self.show_bulk_results_button.configure(state=tk.NORMAL if self.bulk_result is not None else tk.DISABLED)
 
@@ -1078,6 +1653,28 @@ class ConvoySimGui(tk.Tk):
             self._set_status(f"Simulation completed with {len(result.rows)} output rows.", "success")
         except Exception as error:  # noqa: BLE001 - GUI should surface any validation/runtime error.
             self._set_status(f"Error: {error}", "error")
+
+    def open_online_visualization_window(self) -> None:
+        if not self.visualization_rows:
+            self._set_status("Run a simulation first.", "warning")
+            return
+        window = OnlineVisualizationWindow(
+            parent=self,
+            header=self._loaded_scenario_label(),
+            rows=self.visualization_rows,
+            parameters_path=self.parameters_path.get(),
+            scenario_path=self.scenario_path.get(),
+            braking_table_path=self.braking_path.get(),
+            distances=self._visualization_distances(),
+            truck_length_m=self._truck_length_m(),
+            playback_speed=self.playback_speed_var.get(),
+            on_close=self._forget_online_visualization_window,
+        )
+        self._online_visualization_windows.append(window)
+
+    def _forget_online_visualization_window(self, window: OnlineVisualizationWindow) -> None:
+        if window in self._online_visualization_windows:
+            self._online_visualization_windows.remove(window)
 
     def open_bulk_simulations_tab(self) -> None:
         if self.notebook is None:

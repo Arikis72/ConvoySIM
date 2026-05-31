@@ -14,6 +14,10 @@ related: ["[[AGENTS]]", "[[STATUS]]", "[[decisions]]"]
 
 
 
+## 2026-05-31 — Online Visualization: live leader control (REQ-21-14)
+
+Added `Open Online Visualization` button alongside existing `Open Visualization`. Opens `OnlineVisualizationWindow` — a fully standalone new class (no changes to any existing visualization code). New file `src/convoysim/live_stepper.py` provides `LiveSimStepper` (re-simulates silently to current time, then steps 1 second at a time under user-supplied `LiveLeaderCommand`). Supports: Pause/Resume, Accelerate/Decelerate (editable rate), Orange/Red/FORT brake, undo (← keyboard), HOLD (→ keyboard), Back to Sim (discard live rows), Save As (merged scenario CSV auto-loaded into Scenario tab). Default rates from loaded parameters. Scenario saving preserves Trucks 2/3 image events from original; updated leader velocities form dense waypoints in the new file. `_undo_stack` allows arbitrary undo depth. All existing tests pass unchanged (93 run, same 4 failures + 32 errors as pre-existing).
+
 ## 2026-05-31 — BUG-003 UI/UX review + new GUI requirements (REQ-21-07 to REQ-21-13)
 
 Reviewed the Agentic_dev_analysis_results.md Phase E gaps for ConvoySIM. Conducted manual UI/UX review of Stage C popup, Bulk Simulation tab, and Cost Weight tab (BUG-003). User ran simulation and reported 7 issues, all implemented and documented.
