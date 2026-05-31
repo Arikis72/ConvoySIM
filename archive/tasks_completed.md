@@ -11,6 +11,16 @@ related: ["[[TASKS]]"]
 
 > Archived from `TASKS.md` on 2026-05-30. See [[TASKS]] for current open tasks.
 
+## Completed tasks (archived 2026-05-31, session 2)
+
+- [x] Fix Online Visualization back-step metric — `_steps_per_second` → `_output_rows_per_second` using `output_resolution_s` (BUG-C04, REQ-21-15).
+- [x] Fix Online Visualization Save As missing pre-live truck2/truck3 events — inject event-only rows before compression (BUG-C05, REQ-21-16).
+- [x] Fix leader upper rectangle colors — `leader_status_style()` with orange/red/FORT/normal states; `leader_command_kind` propagated through `_build_output_row` (BUG-C06, BUG-C10, REQ-21-17).
+- [x] Implement FOLLOW_PROFILE auto-advance with `return_to_sim_velocity_s` look-ahead and gradual velocity convergence (BUG-C07, BUG-C09, REQ-21-18).
+- [x] Fix Back to Sim button permanently disabled after undo-all + re-intervention (BUG-C08, REQ-21-19).
+- [x] Add ID-loss triangle swatches to legend and move braking info labels into leader row (BUG-C11, REQ-21-20, REQ-21-21).
+- [x] Fix `CLAUDE.md` to require reading `AGENTS.md` with NO line limit — prevents partial reads that caused documentation to be skipped mid-session.
+
 ## Completed tasks (archived 2026-05-31)
 
 - [x] Complete manual UI/UX review: Stage C popup, Bulk Simulation tab, Cost Weight tab (BUG-003). User ran simulation 2026-05-31; 7 issues identified and fixed; tracked as REQ-21-07 through REQ-21-13; BUG-003 closed as BUG-C03 in `known_issues.md`.

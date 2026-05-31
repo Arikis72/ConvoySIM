@@ -40,8 +40,9 @@ from convoysim.units import kph_to_mps, ms_to_seconds
 class LiveLeaderCommand:
     """A single leader-control command applied for one simulated second."""
 
-    kind: Literal["hold", "accelerate", "decelerate", "orange_brake", "red_brake", "fort_brake"]
+    kind: Literal["hold", "accelerate", "decelerate", "orange_brake", "red_brake", "fort_brake", "follow_profile"]
     rate_mps2: float = 0.0  # used for "accelerate" and "decelerate" kinds only
+    target_velocity_mps: float = 0.0  # resolved internally for "follow_profile"
 
 
 # Convenience constructors
@@ -49,6 +50,7 @@ HOLD = LiveLeaderCommand(kind="hold")
 ORANGE_BRAKE = LiveLeaderCommand(kind="orange_brake")
 RED_BRAKE = LiveLeaderCommand(kind="red_brake")
 FORT_BRAKE = LiveLeaderCommand(kind="fort_brake")
+FOLLOW_PROFILE = LiveLeaderCommand(kind="follow_profile")
 
 
 def accelerate(rate_mps2: float) -> LiveLeaderCommand:
@@ -132,6 +134,10 @@ class LiveSimStepper:
         Saves a snapshot for undo before mutating state.
         Returns all output rows generated during this second.
         """
+        if command.kind == "follow_profile":
+            lookahead_t = self._state.time_s + self._parameters.return_to_sim_velocity_s
+            target_mps = kph_to_mps(self._timeline.leader_profile().velocity_at(lookahead_t))
+            command = LiveLeaderCommand(kind="follow_profile", target_velocity_mps=target_mps)
         self._undo_stack.append(self._state.copy())
         return self._step_n(command, n_steps=max(1, round(1.0 / self._parameters.simulation_time_step_s)))
 
@@ -311,7 +317,7 @@ class LiveSimStepper:
             elif communication.leader_stop_requested:
                 acceleration1 = _communication_stop_acceleration(s.truck1, params, self._braking_table, s.time_s, self._log)
             else:
-                acceleration1 = self._leader_acceleration(command, s.truck1, params)
+                acceleration1 = self._leader_acceleration(command, s.truck1, params, step_s)
 
             truck1 = step_motion(s.truck1, acceleration1, step_s)
             truck2 = step_motion(s.truck2, cmd2.acceleration_mps2, step_s,
@@ -341,6 +347,7 @@ class LiveSimStepper:
                     communication=communication, parameters=params,
                     truck_length_m=initial.truck_length_m,
                     truck1_in_fort=fort_latched,
+                    leader_command_kind=command.kind,
                 ))
                 output_index += 1
 
@@ -358,10 +365,13 @@ class LiveSimStepper:
         return tuple(rows)
 
     @staticmethod
-    def _leader_acceleration(command: LiveLeaderCommand, truck1: MotionState, params: SimulationParameters) -> float:
+    def _leader_acceleration(command: LiveLeaderCommand, truck1: MotionState, params: SimulationParameters, step_s: float = 0.1) -> float:
         kind = command.kind
         if kind == "hold":
             return 0.0
+        if kind == "follow_profile":
+            accel = (command.target_velocity_mps - truck1.velocity_mps) / params.return_to_sim_velocity_s
+            return max(-params.max_red_deceleration_mps2, min(params.max_acceleration_mps2, accel))
         if kind == "accelerate":
             return min(command.rate_mps2, params.max_acceleration_mps2)
         if kind == "decelerate":

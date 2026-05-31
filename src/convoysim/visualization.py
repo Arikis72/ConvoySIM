@@ -416,6 +416,17 @@ def leader_style(row: SimulationRow) -> TruckVisualStyle:
     return TruckVisualStyle(fill="#e6eef8", outline="#24527a", width=2)
 
 
+def leader_status_style(state: str, command: str) -> TruckVisualStyle:
+    combined = f"{state} {command}".lower()
+    if "fort" in combined:
+        return TruckVisualStyle(fill="black", outline="black", width=3)
+    if is_red_status(state, command, ""):
+        return TruckVisualStyle(fill=RED_STATUS_COLOR, outline=RED_STATUS_COLOR, width=3)
+    if is_orange_status(state, command):
+        return TruckVisualStyle(fill=ORANGE_STATUS_COLOR, outline=ORANGE_STATUS_COLOR, width=3)
+    return TruckVisualStyle(fill="white", outline="black", width=2)
+
+
 def label_y_positions(road_y: float, label_lane: int) -> tuple[float, float, float]:
     top_bubble_y = road_y - 132 + label_lane * 28
     bottom_bubble_y = road_y + 78 + label_lane * 30
@@ -689,7 +700,10 @@ class ConvoyPlaybackCanvas:
         top_y = road_y - half_height
         bottom_y = road_y + half_height
         body_style = truck_body_style(label_lane)
-        status_style = status_indicator_style(label_lane, state, command, tracking_status, violation)
+        if label_lane == 2:
+            status_style = leader_status_style(state, command)
+        else:
+            status_style = status_indicator_style(label_lane, state, command, tracking_status, violation)
         self.canvas.create_rectangle(
             rear_x,
             top_y - STATUS_RECT_HEIGHT_PX,

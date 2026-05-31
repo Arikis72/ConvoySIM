@@ -60,3 +60,4 @@ class SimulationParameters:
     simulation_time_step_s: float = 0.1
     output_resolution_s: float = 0.1
     start_moving_gap_m: float = 10.0
+    return_to_sim_velocity_s: float = 3.0

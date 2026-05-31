@@ -43,6 +43,7 @@ from convoysim.optimization import (
 )
 from convoysim.braking import BrakingDistanceTable
 from convoysim.live_stepper import (
+    FOLLOW_PROFILE,
     FORT_BRAKE,
     HOLD,
     ORANGE_BRAKE,
@@ -542,6 +543,32 @@ def _save_online_scenario(
             "t3e": row.truck3_image_event.value if row.truck3_image_event is not None else "",
             "notes": row.notes,
         })
+
+    # Inject event-only rows (truck2/truck3 image events before live entry) that are not
+    # already covered by a velocity row.  Use carry-forward leader velocity so that
+    # _compress_scenario_rows does not treat the injected row as a velocity change.
+    existing_times = {r["t"] for r in all_rows}
+    event_only: list[dict] = []
+    event_times_to_inject: set[float] = set()
+    for t in list(t2_events) + list(t3_events):
+        if t <= live_entry_time_s + 1e-9 and t not in existing_times:
+            event_times_to_inject.add(t)
+
+    for t in event_times_to_inject:
+        # Carry-forward velocity: last velocity row at or before this time
+        prior_vels = [r["vel"] for r in all_rows if r["t"] <= t + 1e-9]
+        carry_vel = prior_vels[-1] if prior_vels else 0.0
+        event_only.append({
+            "t": t,
+            "vel": carry_vel,
+            "t1e": t1_events.get(t, ""),
+            "t2e": t2_events.get(t, ""),
+            "t3e": t3_events.get(t, ""),
+            "notes": "",
+        })
+
+    all_rows = sorted(all_rows + event_only, key=lambda r: r["t"])
+
     for live_row in live_rows:
         t = round(live_row.time_s, 10)
         # Write FORT event at the first FORT row; otherwise carry original scenario events
@@ -612,7 +639,7 @@ class OnlineVisualizationWindow:
         self._live_stepper: LiveSimStepper | None = None
         self._live_entry_index = 0
         self._live_rows: list[SimulationRow] = []
-        self._steps_per_second = 10  # overridden after parameters load
+        self._output_rows_per_second = 1  # overridden after parameters load
 
         self.current_frame_index = 0
         self.is_playing = False
@@ -642,7 +669,7 @@ class OnlineVisualizationWindow:
             p = loaded.simulation_parameters
             self._accel_rate_var.set(f"{p.max_acceleration_mps2:.2f}")
             self._decel_rate_var.set(f"{p.orange_deceleration_mps2:.2f}")
-            self._steps_per_second = max(1, round(1.0 / p.simulation_time_step_s))
+            self._output_rows_per_second = max(1, round(1.0 / p.output_resolution_s))
             self._orange_braking_mode = p.orange_braking_mode
         except Exception:  # noqa: BLE001
             pass
@@ -709,8 +736,21 @@ class OnlineVisualizationWindow:
         self._save_as_btn.pack(side=tk.LEFT, padx=4)
         self._save_as_btn.configure(state=tk.DISABLED)
 
-        # --- Braking info bar ---
-        self._build_braking_info_bar(self.window, orange_dist, red_dist, loss_dist, resume_dist)
+        # --- Braking / ID info labels, inlined to the right of the leader row ---
+        ttk.Separator(leader_row, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=10)
+        if self._orange_braking_mode == 1:
+            orange_text = "Orange: TimeHeadway"
+        elif orange_dist is not None:
+            orange_text = f"Orange dist: {orange_dist:.1f} m"
+        else:
+            orange_text = "Orange: —"
+        red_text = f"Red dist: {red_dist:.1f} m" if red_dist is not None else "Red: —"
+        loss_text = f"ID loss: {loss_dist:.1f} m" if loss_dist is not None else "ID loss: —"
+        resume_text = f"ID resume: {resume_dist:.1f} m" if resume_dist is not None else "ID resume: —"
+        tk.Label(leader_row, text=orange_text, fg="#d77a00", font=("Arial", 9, "bold")).pack(side=tk.LEFT, padx=(0, 10))
+        tk.Label(leader_row, text=red_text, fg="#b00020", font=("Arial", 9, "bold")).pack(side=tk.LEFT, padx=(0, 10))
+        tk.Label(leader_row, text=loss_text, fg="#444", font=("Arial", 9)).pack(side=tk.LEFT, padx=(0, 10))
+        tk.Label(leader_row, text=resume_text, fg="#444", font=("Arial", 9)).pack(side=tk.LEFT)
 
         # --- PanedWindow ---
         self.pane = tk.PanedWindow(self.window, orient=tk.VERTICAL, sashwidth=8, sashrelief=tk.RAISED, showhandle=True)
@@ -824,7 +864,7 @@ class OnlineVisualizationWindow:
         if not self.is_playing:
             return
         if self._live_mode and self._live_stepper is not None:
-            new_rows = self._live_stepper.advance_one_second(HOLD)
+            new_rows = self._live_stepper.advance_one_second(FOLLOW_PROFILE)
             if new_rows:
                 self._live_rows.extend(new_rows)
                 self.rows.extend(new_rows)
@@ -857,7 +897,7 @@ class OnlineVisualizationWindow:
         self.pause()
         if self._live_mode and self._live_stepper is not None and self._live_stepper.can_undo:
             if self._live_stepper.undo_one_second():
-                n = self._steps_per_second
+                n = self._output_rows_per_second
                 self._live_rows = self._live_rows[:-n]
                 self.rows = self.rows[:self._live_entry_index + 1 + len(self._live_rows)]
                 if not self._live_rows:
@@ -895,6 +935,7 @@ class OnlineVisualizationWindow:
     def _ensure_live_mode(self) -> bool:
         """Activate live mode from current frame.  Returns False if setup fails."""
         if self._live_mode:
+            self._back_to_sim_btn.configure(state=tk.NORMAL)
             return True
         self.pause()
         try:
@@ -903,7 +944,7 @@ class OnlineVisualizationWindow:
             braking = BrakingDistanceTable.from_csv(self._braking_table_path) if self._braking_table_path else None
             current_time = self.rows[self.current_frame_index].time_s if self.rows else 0.0
             self._live_entry_index = self.current_frame_index
-            self._steps_per_second = max(1, round(1.0 / loaded.simulation_parameters.simulation_time_step_s))
+            self._output_rows_per_second = max(1, round(1.0 / loaded.simulation_parameters.output_resolution_s))
             self._live_stepper = LiveSimStepper(
                 loaded.initial_conditions,
                 loaded.simulation_parameters,
@@ -1018,7 +1059,8 @@ class OnlineVisualizationWindow:
 
     def _build_legend(self, parent: tk.Widget) -> ttk.Frame:
         frame = ttk.Frame(parent)
-        items = (
+        # Line-swatch items: (label, color, dash, width)
+        line_items = (
             ("Truck #1", truck_color_for_label(2), None, 4),
             ("Truck #2 / Gap1-2", truck_color_for_label(1), None, 4),
             ("Truck #3 / Gap2-3", truck_color_for_label(0), None, 4),
@@ -1026,39 +1068,32 @@ class OnlineVisualizationWindow:
             ("Orange braking", "#d77a00", None, 4),
             ("Red braking / violation", "#b00020", None, 4),
         )
-        for i, (text, color, dash, width) in enumerate(items):
+        col = 0
+        for text, color, dash, width in line_items:
             item = tk.Frame(frame)
-            item.grid(row=0, column=i, sticky="w", padx=8, pady=3)
+            item.grid(row=0, column=col, sticky="w", padx=8, pady=3)
+            col += 1
             swatch = tk.Canvas(item, width=40, height=12, highlightthickness=0)
             swatch.pack(side=tk.LEFT)
             swatch.create_line(2, 6, 38, 6, fill=color, width=width, dash=dash)
             tk.Label(item, text=text).pack(side=tk.LEFT, padx=4)
+        # Triangle swatches for ID-loss markers (solid = distance-based, hollow = scenario-based)
+        triangle_items = (
+            ("ID loss T2 (dist)", truck_color_for_label(1), truck_color_for_label(1)),
+            ("ID loss T2 (scen)", truck_color_for_label(1), "white"),
+            ("ID loss T3 (dist)", truck_color_for_label(0), truck_color_for_label(0)),
+            ("ID loss T3 (scen)", truck_color_for_label(0), "white"),
+        )
+        for text, outline, fill in triangle_items:
+            item = tk.Frame(frame)
+            item.grid(row=0, column=col, sticky="w", padx=8, pady=3)
+            col += 1
+            swatch = tk.Canvas(item, width=20, height=14, highlightthickness=0)
+            swatch.pack(side=tk.LEFT)
+            # Triangle points: apex top-centre, base-left, base-right
+            swatch.create_polygon(10, 1, 2, 13, 18, 13, outline=outline, fill=fill, width=2)
+            tk.Label(item, text=text).pack(side=tk.LEFT, padx=4)
         return frame
-
-    def _build_braking_info_bar(
-        self,
-        parent: tk.Widget,
-        orange_dist: float | None,
-        red_dist: float | None,
-        loss_dist: float | None,
-        resume_dist: float | None,
-    ) -> None:
-        """Add a compact braking-parameters info bar above the visualization pane."""
-        bar = ttk.Frame(parent)
-        bar.pack(fill=tk.X, padx=8, pady=(0, 2))
-        if self._orange_braking_mode == 1:
-            orange_text = "Orange mode: TimeHeadway"
-        elif orange_dist is not None:
-            orange_text = f"Orange dist: {orange_dist:.1f} m"
-        else:
-            orange_text = "Orange: —"
-        red_text = f"Red dist: {red_dist:.1f} m" if red_dist is not None else "Red: —"
-        loss_text = f"ID loss: {loss_dist:.1f} m" if loss_dist is not None else "ID loss: —"
-        resume_text = f"ID resume: {resume_dist:.1f} m" if resume_dist is not None else "ID resume: —"
-        tk.Label(bar, text=orange_text, fg="#d77a00", font=("Arial", 9, "bold")).pack(side=tk.LEFT, padx=(0, 14))
-        tk.Label(bar, text=red_text, fg="#b00020", font=("Arial", 9, "bold")).pack(side=tk.LEFT, padx=(0, 14))
-        tk.Label(bar, text=loss_text, fg="#444", font=("Arial", 9)).pack(side=tk.LEFT, padx=(0, 14))
-        tk.Label(bar, text=resume_text, fg="#444", font=("Arial", 9)).pack(side=tk.LEFT)
 
     def _update_charts_data(self) -> None:
         """Update all canvas/chart data when self.rows changes. Call once after row list mutation."""

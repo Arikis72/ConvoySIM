@@ -10,7 +10,7 @@ related: ["[[AGENTS]]", "[[requirements_traceability]]", "[[known_issues]]", "[[
 # ConvoySIM — Current Status
 
 > **Snapshot only.** Replace this content each session. History lives in `progress.md`.
-> Last updated: 2026-05-31
+> Last updated: 2026-05-31 (session 2)
 
 ---
 
@@ -25,7 +25,7 @@ related: ["[[AGENTS]]", "[[requirements_traceability]]", "[[known_issues]]", "[[
 
 **Test suite:** Last run 2026-05-31 — 93 tests; 4 failures + 32 errors are pre-existing (missing `Inputs/stage_a_example_inputs/parameters.csv` and `braking_distance_table.csv` — path mismatch in test fixtures, not introduced by this session). No new failures. See `test_strategy.md` for module coverage.
 
-**Requirements:** See `requirements_traceability.md` for REQ ID status. Open items: REQ-25 (leader resume after comms override — frozen; true pause/stop for real-time mode). REQ-21-07 through REQ-21-14 added and implemented this session. REQ-21-14 pending manual UI/UX review.
+**Requirements:** See `requirements_traceability.md` for REQ ID status. Open items: REQ-25 (leader resume after comms override — frozen; true pause/stop for real-time mode). REQ-21-15 through REQ-21-21 added and implemented this session. REQ-21-14 through REQ-21-21 pending manual UI/UX review.
 
 ---
 
@@ -46,6 +46,14 @@ See `known_issues.md` for full entries. Active:
 
 Closed this session:
 - BUG-C03 ✅: 7 UI/UX issues from manual review (2026-05-31) — all fixed (REQ-21-07 to REQ-21-13).
+- BUG-C04 ✅: Online Viz back-step removed all live rows instead of 1 — `_steps_per_second` corrected to use `output_resolution_s` (REQ-21-15).
+- BUG-C05 ✅: Online Viz Save As dropped truck2/truck3 events before live-entry — event-only row injection added (REQ-21-16).
+- BUG-C06 ✅: Leader upper rectangle wrong color — `leader_status_style()` added with white/black/orange/red/black states (REQ-21-17).
+- BUG-C07 ✅: Auto-advance used HOLD instead of original scenario profile — `FOLLOW_PROFILE` + `return_to_sim_velocity_s` param (REQ-21-18).
+- BUG-C08 ✅: Back to Sim button permanently disabled after undo-all then re-intervening — `_ensure_live_mode` short-circuit now re-enables button (REQ-21-19).
+- BUG-C09 ✅: FOLLOW_PROFILE velocity jump was instantaneous — corrected divisor to `return_to_sim_velocity_s` with accel clamping (REQ-21-18).
+- BUG-C10 ✅: Orange/Red brake clicks produced no color change on leader rectangle — `leader_command_kind` propagated through `_build_output_row` (REQ-21-17).
+- BUG-C11 ✅: Legend missing ID-loss triangles; braking info on separate row — triangles added to legend; info labels inlined into leader row (REQ-21-20, REQ-21-21).
 
 ---
 

@@ -872,11 +872,15 @@ def _gap_violation(gap_m: float, parameters: SimulationParameters) -> bool:
     return gap_m <= 0 or gap_m < parameters.minimum_gap_m or gap_m > parameters.maximum_gap_m
 
 
-def _leader_state(truck: MotionState, acceleration_mps2: float, communication: CommunicationDirective) -> str:
+def _leader_state(truck: MotionState, acceleration_mps2: float, communication: CommunicationDirective, command_kind: str = "") -> str:
     if communication.leader_stop_requested:
         return "LEADER_COMMUNICATION_STOP"
     if truck.velocity_mps <= 1e-9:
         return "LEADER_STOPPED"
+    if command_kind == "orange_brake":
+        return "LEADER_ORANGE_BRAKE"
+    if command_kind == "red_brake":
+        return "LEADER_RED_BRAKE"
     if acceleration_mps2 > 1e-9:
         return "LEADER_ACCELERATING"
     if acceleration_mps2 < -1e-9:
@@ -884,11 +888,15 @@ def _leader_state(truck: MotionState, acceleration_mps2: float, communication: C
     return "LEADER_CRUISING"
 
 
-def _leader_command(truck: MotionState, acceleration_mps2: float, communication: CommunicationDirective) -> str:
+def _leader_command(truck: MotionState, acceleration_mps2: float, communication: CommunicationDirective, command_kind: str = "") -> str:
     if communication.leader_stop_requested:
         return "Communication stop request"
     if truck.velocity_mps <= 1e-9:
         return "Hold stopped"
+    if command_kind == "orange_brake":
+        return "Orange brake"
+    if command_kind == "red_brake":
+        return "Red brake"
     if acceleration_mps2 > 1e-9:
         return "Follow leader profile acceleration"
     if acceleration_mps2 < -1e-9:
@@ -915,6 +923,7 @@ def _build_output_row(
     parameters: SimulationParameters,
     truck_length_m: float,
     truck1_in_fort: bool = False,
+    leader_command_kind: str = "",
 ) -> SimulationRow:
     gap2_m = _gap(truck1, truck2, truck_length_m)
     gap3_m = _gap(truck2, truck3, truck_length_m)
@@ -955,8 +964,8 @@ def _build_output_row(
         violation_type_truck3=violation3,
         stop_reason_truck2=control2.stop_reason,
         stop_reason_truck3=control3.stop_reason,
-        truck1_state="FORT_EMERGENCY_DECEL" if truck1_in_fort else _leader_state(truck1, acceleration1_mps2, communication),
-        truck1_command="FORT emergency deceleration" if truck1_in_fort else _leader_command(truck1, acceleration1_mps2, communication),
+        truck1_state="FORT_EMERGENCY_DECEL" if truck1_in_fort else _leader_state(truck1, acceleration1_mps2, communication, leader_command_kind),
+        truck1_command="FORT emergency deceleration" if truck1_in_fort else _leader_command(truck1, acceleration1_mps2, communication, leader_command_kind),
         truck2_loss_source=control2.loss_source,
         truck3_loss_source=control3.loss_source,
         truck2_loss_target_rear_m=_loss_target_rear(control2, truck_length_m),

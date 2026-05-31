@@ -498,3 +498,31 @@ The orange target gap and TimeHeadway mode need to be visible and consistent bet
 
 Consequences:
 Stage A output includes orange-trigger-gap columns, Stage C shows required-gap arrows above actual gaps, and scenario timelines can trigger per-truck FORT emergency deceleration.
+
+## 2026-05-31 — FOLLOW_PROFILE: look-ahead over return_to_sim_velocity_s, not current time
+
+Decision:
+When auto-advancing in live mode, the leader targets the profile's velocity at `current_time + return_to_sim_velocity_s` (default 3 s ahead), not at `current_time`.
+
+Reason:
+Targeting the current-time velocity causes over-correction: if the profile drops in 2 s, the leader accelerates to the current target and then must immediately brake. Looking ahead by `return_to_sim_velocity_s` seconds pre-adjusts the leader so it arrives at the right velocity when the profile change occurs.
+
+Alternatives considered:
+Targeting `current_time` velocity (simpler, but causes oscillation at velocity transitions). PID controller (more robust but complex and adds a tunable parameter set).
+
+Consequences:
+`return_to_sim_velocity_s` must be added to `SimulationParameters` (user-tunable, default 3 s). Larger values = smoother but slower convergence. The acceleration is clamped to vehicle limits so unreachable targets degrade gracefully.
+
+## 2026-05-31 — leader_command_kind propagated through _build_output_row
+
+Decision:
+Added optional `leader_command_kind: str = ""` to `_leader_state`, `_leader_command`, and `_build_output_row` in `simulation.py`; `_step_n` in `live_stepper.py` passes `command.kind`.
+
+Reason:
+`_leader_state` / `_leader_command` only had access to the resulting acceleration magnitude, not the originating command type. Orange brake and normal deceleration both produce the same negative acceleration, making them indistinguishable in the output row — and therefore in the visualization's color logic.
+
+Alternatives considered:
+Storing the live command kind separately in `_StepperState` (more invasive). Computing color from acceleration thresholds (unreliable — a hard deceleration from Accelerate → HOLD could exceed orange threshold). 
+
+Consequences:
+Pre-calculated simulation (non-live) always passes `""` (default), so existing behavior is unchanged. Live mode rows now carry the exact command kind in `truck1_state` / `truck1_command`, enabling correct color coding and future log analysis.

@@ -15,6 +15,8 @@ related: ["[[AGENTS]]"]
 
 **Do not begin any task, plan, or edit until you have read `AGENTS.md` in full.**
 
+> ⚠️ **Read `AGENTS.md` with NO line limit.** Do not use `limit=` or any pagination when reading it. A partial read is the same as not reading it. Every section contains mandatory operating rules — missing any section means missing critical instructions.
+
 This file contains no rules. It only points you to `AGENTS.md`.
 
 ---
