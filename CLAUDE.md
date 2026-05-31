@@ -29,3 +29,16 @@ This file contains no rules. It only points you to `AGENTS.md`.
 - Method: Google OAuth
 - Email: arikilogin@gmail.com
 - Access: Public repository
+
+---
+
+## Security — Excluded from Version Control
+
+**These files are protected by `.gitignore` and will NEVER be committed:**
+
+- `myNotes.md` — personal notes
+- `*.env` — environment files with secrets
+- `*.env.local` — local environment overrides
+- `.env*` — any .env-prefixed files
+
+**Never store passwords, API tokens, or credentials in committed files.** Use `.gitignore`-protected files only.
