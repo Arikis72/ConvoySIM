@@ -1,3 +1,12 @@
+---
+title: ConvoySIM — Changelog
+type: changelog
+date: 2026-05-29
+description: User-visible project changes for ConvoySIM, ordered newest-first.
+tags: [convoysim, changelog]
+related: ["[[README]]", "[[STATUS]]", "[[TASKS]]", "[[progress]]"]
+---
+
 # CHANGELOG.md
 
 This file records user-visible project changes.

@@ -14,6 +14,16 @@ related: ["[[AGENTS]]", "[[STATUS]]", "[[decisions]]"]
 
 
 
+## 2026-05-31 — BUG-003 UI/UX review + new GUI requirements (REQ-21-07 to REQ-21-13)
+
+Reviewed the Agentic_dev_analysis_results.md Phase E gaps for ConvoySIM. Conducted manual UI/UX review of Stage C popup, Bulk Simulation tab, and Cost Weight tab (BUG-003). User ran simulation and reported 7 issues, all implemented and documented.
+
+Changes: (1) Gap chart Y-axis capped at 120% of max gap / 40 m hard limit (`y_max_cap=40.0`). (2) "status/command/violation" label clamped within canvas bounds. (3) Open Visualization / Open Charts buttons disabled on startup — only enabled after a successful run this session. (4) Toggle Legend repacked `before=pane` so legend is always fully visible. (5) Scenario Save/Save As disabled when clean, enabled on edit/insert/delete. (6) Inline warning blocks simulation run when Parameters tab has unsaved changes. (7) Keyboard shortcuts on both Stage C and Bulk visualization windows: ← = −1s, → = +1s, Home = start, End = end.
+
+Documentation: BUG-003 closed as BUG-C03; 7 new REQ IDs (REQ-21-07 to REQ-21-13) added to SimRequirements.md §21 and requirements_traceability.md; TASKS.md updated; STATUS.md replaced. Note: REQ-25-01 (leader resume after comms override) remains frozen by user decision.
+
+Test suite: 93 tests run; 4 failures + 32 errors are pre-existing (missing test fixture files in `Inputs/stage_a_example_inputs/`), not introduced this session.
+
 ## 2026-05-29 - Gap arrow distance labels moved above arrow lines
 
 Progress:

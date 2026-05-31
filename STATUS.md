@@ -10,7 +10,7 @@ related: ["[[AGENTS]]", "[[requirements_traceability]]", "[[known_issues]]", "[[
 # ConvoySIM — Current Status
 
 > **Snapshot only.** Replace this content each session. History lives in `progress.md`.
-> Last updated: 2026-05-30
+> Last updated: 2026-05-31
 
 ---
 
@@ -19,29 +19,33 @@ related: ["[[AGENTS]]", "[[requirements_traceability]]", "[[known_issues]]", "[[
 | Stage | Status | Notes |
 |-------|:------:|-------|
 | Stage A — Basic simulation (CLI + output CSV + HTML charts) | ✅ | All follower logic, orange/red/FORT, TimeHeadway, SAFETY_LOCK implemented |
-| Stage A — GUI (Parameters, Scenario, Output, Log tabs) | ✅ | Editable params + scenario, bulk, cost weight tabs; manual GUI review pending |
+| Stage A — GUI (Parameters, Scenario, Output, Log tabs) | ✅ | Editable params + scenario, bulk, cost weight tabs; UI/UX review done 2026-05-31 |
 | Stage B — Parameter optimization (sweep + bulk simulations) | ✅ | Single-parameter bulk runs; multi-parameter optimization is future work |
-| Stage C — Visualization popup | ✅ | Full playback, gap/velocity charts, state-machine Help; manual GUI review pending |
+| Stage C — Visualization popup | ✅ | Full playback, gap/velocity charts, state-machine Help; UI/UX review done 2026-05-31 |
 
-**Test suite:** Last full run 2026-05-29 — partial (8 targeted tests); prior confirmed full run 2026-05-28 (91 tests passing). Full suite count at last full run: ~91. See `test_strategy.md` for module coverage.
+**Test suite:** Last run 2026-05-31 — 93 tests; 4 failures + 32 errors are pre-existing (missing `Inputs/stage_a_example_inputs/parameters.csv` and `braking_distance_table.csv` — path mismatch in test fixtures, not introduced by this session). No new failures. See `test_strategy.md` for module coverage.
 
-**Requirements:** See `requirements_traceability.md` for REQ ID status. Open items: REQ-25 (leader resume after comms override; true pause/stop for real-time mode).
+**Requirements:** See `requirements_traceability.md` for REQ ID status. Open items: REQ-25 (leader resume after comms override — frozen by user decision; true pause/stop for real-time mode). REQ-21-07 through REQ-21-13 added and implemented this session.
 
 ---
 
 ## Open blockers
 
-- None blocking current functionality. Two open questions in REQ-25 require user input before implementing.
+- None blocking current functionality.
+- REQ-25-01 (leader resume after comms override) is **frozen** by user decision — not in scope until further notice.
+- REQ-25-02 (true pause/stop for real-time sim mode) open — needs user scoping.
+- Pre-existing test failures: `Inputs/stage_a_example_inputs/` missing `parameters.csv` and `braking_distance_table.csv` — test fixture path mismatch, not a simulation bug.
 
 ---
 
 ## Known issues (summary)
 
 See `known_issues.md` for full entries. Active:
-- Communication reliability is deterministic (intentional for repeatability) — detailed probabilistic behavior in §25 open questions.
-- Leader resume after communication override not yet implemented (behavior still open in requirements).
-- Stage A execution is synchronous — Stage C playback replays completed rows (does not pause in-progress sim).
-- Manual GUI review (Stage C popup; Bulk Simulation tab; Cost Weight tab) not yet done this cycle.
+- BUG-001 🔴: Leader resume behavior after communication override undefined (frozen — no action until user decides).
+- BUG-002 🔴: True pause/stop controls do not interrupt in-progress Stage A simulation run.
+
+Closed this session:
+- BUG-C03 ✅: 7 UI/UX issues from manual review (2026-05-31) — all fixed (REQ-21-07 to REQ-21-13).
 
 ---
 
@@ -55,4 +59,4 @@ See `known_issues.md` for full entries. Active:
 
 ## Next recommended action
 
-Manually click through the Bulk Simulation tab + Cost Weight tab + Stage C popup to complete UI/UX review. Then consider adding more Stage B cost functions.
+Consider adding more Stage B cost functions (safety violations, full stops, oscillations). Or address the pre-existing test fixture path mismatch for `Inputs/stage_a_example_inputs/`.

@@ -21,7 +21,6 @@ related: ["[[AGENTS]]", "[[requirements_traceability]]", "[[known_issues]]", "[[
 - [ ] Implement true pause/stop controls for long-running/real-time simulation mode (REQ-25-02 — needs user scoping).
 - [ ] Add additional Stage B cost functions for safety violations, full stops, and oscillations.
 - [ ] Consider multi-parameter Stage B optimization after single-parameter bulk simulation performance is reviewed.
-- [ ] Complete manual UI/UX review: Stage C popup, Bulk Simulation tab, Cost Weight tab (BUG-003 in `known_issues.md`).
 
 ---
 

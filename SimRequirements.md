@@ -1,3 +1,12 @@
+---
+title: Three-Truck Convoy Simulation Requirements
+type: requirements
+date: 2026-05-22
+description: Formal requirements for the three-truck convoy simulator covering convoy structure, physics, follower state machine, communication, GUI, Stage B optimization, and Stage C visualization.
+tags: [convoysim, requirements]
+related: ["[[ConvoyLogic]]", "[[AGENTS]]", "[[STATUS]]", "[[TASKS]]"]
+---
+
 # Three-Truck Convoy Simulation Requirements
 
 ## 1. Document purpose
@@ -828,6 +837,7 @@ The GUI shall support:
 - Group parameters visually by sub-category while preserving the parameter CSV format.
 - Validate parameters before running the simulation.
 - Show validation errors, warnings, and routine feedback in a non-modal status line when possible.
+- If the Parameters tab has unsaved changes when Start Simulation is clicked, display an inline warning and block execution. The user must save the Parameters tab before running.
 
 ### 21.2 Input file handling
 
@@ -840,6 +850,7 @@ The GUI shall support:
 - Insert scenario rows.
 - Delete selected scenario rows.
 - Use controlled dropdown values for `Truck2_Image_Event` and `Truck3_Image_Event`: blank, `Loss`, `Resume`, or `FORT activated`.
+- Scenario Save and Save As buttons shall be disabled when no unsaved changes exist in the scenario editor. They become enabled only after a cell edit, row insert, or row delete.
 - Upload braking-distance CSV table.
 - Clear stale output and log views when a new parameter, scenario, or braking table input is selected.
 
@@ -865,7 +876,7 @@ Output review behavior:
 
 - Output table columns should be grouped by truck where practical.
 - Numeric output table values should be presented in compact review format.
-- Chart and visualization controls should be available only when simulation results exist.
+- Chart and visualization controls should be available only when simulation results exist from the current session. On GUI startup, Open Visualization and Open Charts buttons shall be disabled even if a previous output file exists on disk; they become enabled only after a successful Start Simulation run in the current session.
 - Stage C visualization popup should allow dragging the horizontal divider between the truck visualization and chart area to zoom the charts vertically.
 - Stage C visualization popup should remember the truck/chart divider position in `convoysim.ini` for future uses.
 - State Machine Help should include a search field that filters all help tables by substring.
@@ -874,6 +885,7 @@ Output review behavior:
 - Stage C truck body colors should use identity colors: Truck #1 black, Truck #2 blue, and Truck #3 orange.
 - Stage C should draw an upper status rectangle above each truck: same as truck color for normal status, dotted border for image identification loss, orange fill for orange braking, and red fill for red braking or safety violation.
 - Stage C gap review should use separate `Gap1-2` and `Gap2-3` charts.
+- Stage C gap chart Y-axis shall be capped at 120% of the maximum gap value in the simulation, with a hard upper limit of 40 m. This prevents unnecessarily large scales during image-identification loss events.
 - Stage C gap chart segment styling should match the truck/status visual rules: normal truck color, dotted for image identification loss, orange for orange braking, and red for red braking or safety violation.
 - Stage C popup charts should show time tick marks every 1 second and numeric time labels every 10 seconds along their x axes.
 - Stage C popup chart y-axis tick numbers should be displayed with zero decimal places.
@@ -885,6 +897,9 @@ Output review behavior:
 - Stage C legends should explain empty and filled lost-target triangles.
 - Stage C visualization should display configured image-identification loss and resume distances below the orange/red distance labels.
 - Routine save/run/open feedback should use a main-window status line instead of requiring modal OK dialogs.
+- Stage C popup and Bulk visualization popup legend (Toggle Legend) shall always be fully visible when shown. It shall be packed above the visualization pane so that it takes space from the pane rather than being obscured by it on small screens.
+- The Stage C "status / command / violation" rotated Y-axis label shall remain within the visible canvas area at all supported canvas heights.
+- Stage C popup and Bulk visualization popup shall support keyboard shortcuts: left arrow = jump back 1 second, right arrow = jump forward 1 second, Home = jump to simulation start, End = jump to simulation end.
 
 The log window shall report:
 

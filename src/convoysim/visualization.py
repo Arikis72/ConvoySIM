@@ -670,7 +670,8 @@ class ConvoyPlaybackCanvas:
 
     def _draw_origin_labels(self, road_y: float) -> None:
         for text, x, y in origin_label_positions(road_y):
-            self.canvas.create_text(x, y, text=text, angle=90, font=("Arial", 8), fill="#555")
+            clamped_y = min(y, self.height - 80)
+            self.canvas.create_text(x, clamped_y, text=text, angle=90, font=("Arial", 8), fill="#555")
 
     def _draw_truck(
         self,
@@ -789,11 +790,13 @@ class ConvoyTimelineChart:
         series: tuple[ChartSeries, ...] | None = None,
         width: int = 1100,
         height: int = 120,
+        y_max_cap: float | None = None,
     ) -> None:
         self.width = width
         self.height = height
         self.title = title
         self.y_label = y_label
+        self.y_max_cap = y_max_cap
         self.series = series or (
             ChartSeries(
                 "Truck2 gap",
@@ -837,7 +840,11 @@ class ConvoyTimelineChart:
         right_px = self.width - CHART_RIGHT_MARGIN_PX
         top_px = 22.0
         bottom_px = self.height - 42.0
-        y_max = max(max(series.value_for_row(row) for series in self.series) for row in self.rows) or 1.0
+        raw_y_max = max(max(series.value_for_row(row) for series in self.series) for row in self.rows) or 1.0
+        if self.y_max_cap is not None:
+            y_max = max(min(raw_y_max * 1.2, self.y_max_cap), 1.0)
+        else:
+            y_max = raw_y_max
         self.canvas.create_line(left_px, bottom_px, right_px, bottom_px, fill="#777")
         self.canvas.create_line(left_px, top_px, left_px, bottom_px, fill="#777")
         self.canvas.create_text(left_px, 10, anchor="w", text=self.title, font=("Arial", 9, "bold"))

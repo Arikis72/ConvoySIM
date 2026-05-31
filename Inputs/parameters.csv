@@ -12,7 +12,7 @@ Minimum allowed gap distance,3,m,Gap below this value is a minimum-gap violation
 Maximum allowed gap distance,25,m,Gap above this value is a maximum-gap violation
 Red distance,6,m,Gap below this value triggers red braking
 Orange distance,9,m,Gap below this value triggers controlled braking
-Orange braking mode,0,0/1,0=fixed Orange distance; 1=TimeHeadway plus minimum allowed gap
+Orange braking mode,1,0/1,0=fixed Orange distance; 1=TimeHeadway plus minimum allowed gap
 TimeHeadway,3,s,Time headway used when Orange braking mode is 1
 Emergency deceleration,6,m/s^2,Emergency deceleration applied when FORT activated is triggered
 Start moving identification delay,500,ms,Delay before follower recognizes front truck movement

@@ -96,6 +96,7 @@ Do **not** rename public functions, classes, files, or data structures unless th
 - Prefer simple, readable code over clever code
 - Add comments only where the logic is non-obvious
 - Do not add heavy dependencies without explicit approval (project uses pure stdlib + tkinter)
+- **Before your response ends after any code change:** update `requirements_traceability.md` for every REQ acted on, and update `known_issues.md` for every BUG touched. Do not defer documentation to a later message.
 
 ---
 

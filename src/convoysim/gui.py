@@ -193,6 +193,7 @@ class BulkVisualizationWindow:
             series=(ChartSeries("Gap1-2", truck_color_for_label(1), lambda row: row.truck2_gap_m, segment_style_for_rows=lambda start, end: follower_chart_segment_style("Truck2", start, end)),),
             width=1220,
             height=120,
+            y_max_cap=40.0,
         )
         self.gap23_chart = ConvoyTimelineChart(
             charts_frame,
@@ -201,6 +202,7 @@ class BulkVisualizationWindow:
             series=(ChartSeries("Gap2-3", truck_color_for_label(0), lambda row: row.truck3_gap_m, segment_style_for_rows=lambda start, end: follower_chart_segment_style("Truck3", start, end)),),
             width=1220,
             height=120,
+            y_max_cap=40.0,
         )
         velocity_series_list = [ChartSeries("Truck1 velocity", "#333333", lambda row: row.truck1_velocity_kph)]
         if self.show_truck2_velocity_var.get():
@@ -243,7 +245,11 @@ class BulkVisualizationWindow:
         )
         self.time_scale.pack(fill=tk.X, padx=(int(CHART_LEFT_PX), int(CHART_RIGHT_MARGIN_PX)), pady=(6, 8))
         self.legend_frame = self._build_legend(self.window)
-        self.legend_frame.pack(fill=tk.X, padx=8, pady=(0, 8))
+        self.legend_frame.pack(fill=tk.X, padx=8, pady=(0, 8), before=self.pane)
+        self.window.bind("<Left>", lambda _e: self._keyboard_jump(-1.0))
+        self.window.bind("<Right>", lambda _e: self._keyboard_jump(1.0))
+        self.window.bind("<Home>", lambda _e: self.stop())
+        self.window.bind("<End>", lambda _e: self._keyboard_jump_to_end())
         self._apply_chart_visibility()
         self.set_rows(rows)
 
@@ -384,11 +390,24 @@ class BulkVisualizationWindow:
         self.pause()
         self.draw_frame(self.current_frame_index + 1)
 
+    def _keyboard_jump(self, delta_seconds: float) -> None:
+        if not self.rows:
+            return
+        current_time = self.rows[self.current_frame_index].time_s
+        self.pause()
+        self.draw_frame(nearest_row_index(self.rows, current_time + delta_seconds))
+
+    def _keyboard_jump_to_end(self) -> None:
+        if not self.rows:
+            return
+        self.pause()
+        self.draw_frame(len(self.rows) - 1)
+
     def toggle_legend(self) -> None:
         if self.legend_frame.winfo_ismapped():
             self.legend_frame.pack_forget()
         else:
-            self.legend_frame.pack(fill=tk.X, padx=8, pady=(0, 8))
+            self.legend_frame.pack(fill=tk.X, padx=8, pady=(0, 8), before=self.pane)
 
     def _schedule_next_frame(self) -> None:
         if not self.is_playing:
@@ -512,6 +531,10 @@ class ConvoySimGui(tk.Tk):
         self.open_visualization_button: tk.Button | None = None
         self.open_charts_button: tk.Button | None = None
         self.show_bulk_results_button: tk.Button | None = None
+        self.scenario_save_button: tk.Button | None = None
+        self.scenario_save_as_button: tk.Button | None = None
+        self._scenario_dirty = False
+        self._parameters_dirty = False
         self._tab_images: list[tk.PhotoImage] = []
         self._results_available = False
         self._loading_initial_files = True
@@ -619,8 +642,10 @@ class ConvoySimGui(tk.Tk):
         self._add_tab_header(scenario_frame, "Editable scenario timeline CSV", "#fff4d6")
         scenario_controls = ttk.Frame(scenario_frame)
         scenario_controls.pack(fill=tk.X, padx=6, pady=(0, 4))
-        self._colored_button(scenario_controls, "Save", self.save_scenario_tab, "save").pack(side=tk.LEFT, padx=4)
-        self._colored_button(scenario_controls, "Save As", self.save_scenario_tab_as, "save").pack(side=tk.LEFT, padx=4)
+        self.scenario_save_button = self._colored_button(scenario_controls, "Save", self.save_scenario_tab, "save")
+        self.scenario_save_button.pack(side=tk.LEFT, padx=4)
+        self.scenario_save_as_button = self._colored_button(scenario_controls, "Save As", self.save_scenario_tab_as, "save")
+        self.scenario_save_as_button.pack(side=tk.LEFT, padx=4)
         self._colored_button(scenario_controls, "Insert Row", self.insert_scenario_row, "edit").pack(side=tk.LEFT, padx=4)
         self._colored_button(scenario_controls, "Delete Row", self.delete_scenario_rows, "danger").pack(side=tk.LEFT, padx=4)
         self.scenario_table = self._build_table(scenario_frame)
@@ -994,6 +1019,13 @@ class ConvoySimGui(tk.Tk):
             self.velocity_chart.set_rows(())
         self._update_result_buttons()
 
+    def _update_scenario_save_buttons(self) -> None:
+        state = tk.NORMAL if self._scenario_dirty else tk.DISABLED
+        if self.scenario_save_button is not None:
+            self.scenario_save_button.configure(state=state)
+        if self.scenario_save_as_button is not None:
+            self.scenario_save_as_button.configure(state=state)
+
     def _update_result_buttons(self) -> None:
         has_output_rows = self._results_available and (
             bool(self.visualization_rows) or (bool(self.output_path.get()) and Path(self.output_path.get()).exists())
@@ -1020,6 +1052,12 @@ class ConvoySimGui(tk.Tk):
             self._refreshing_output_paths = False
 
     def run_simulation(self) -> None:
+        if self._parameters_dirty:
+            self._set_status(
+                "Parameters have unsaved changes — save the Parameters tab first, then run.",
+                "warning",
+            )
+            return
         try:
             self._refresh_output_paths_from_scenario()
             result = run_basic_simulation_from_files(
@@ -1535,13 +1573,14 @@ class ConvoySimGui(tk.Tk):
         if not path.exists():
             self.parameters_csv_table = CsvTable((), ())
             self._populate_parameters_table()
-            return
-        try:
-            self.parameters_csv_table = load_csv_table(path)
-            self._populate_parameters_table()
-        except (OSError, csv.Error, UnicodeError):
-            self.parameters_csv_table = CsvTable((), ())
-            self._populate_parameters_table()
+        else:
+            try:
+                self.parameters_csv_table = load_csv_table(path)
+                self._populate_parameters_table()
+            except (OSError, csv.Error, UnicodeError):
+                self.parameters_csv_table = CsvTable((), ())
+                self._populate_parameters_table()
+        self._parameters_dirty = False
 
     def _load_cost_weights_tab(self) -> None:
         if self.cost_weights_table is None:
@@ -1562,11 +1601,13 @@ class ConvoySimGui(tk.Tk):
         path = Path(self.scenario_path.get())
         if not path.exists():
             self._populate_treeview(self.scenario_table, CsvTable((), ()), "scenario")
-            return
-        try:
-            self._populate_treeview(self.scenario_table, load_csv_table(path), "scenario")
-        except (OSError, csv.Error, UnicodeError):
-            self._populate_treeview(self.scenario_table, CsvTable((), ()), "scenario")
+        else:
+            try:
+                self._populate_treeview(self.scenario_table, load_csv_table(path), "scenario")
+            except (OSError, csv.Error, UnicodeError):
+                self._populate_treeview(self.scenario_table, CsvTable((), ()), "scenario")
+        self._scenario_dirty = False
+        self._update_scenario_save_buttons()
 
     def _populate_treeview(self, table: ttk.Treeview, csv_table: CsvTable, table_kind: str) -> None:
         table.delete(*table.get_children())
@@ -1662,6 +1703,7 @@ class ConvoySimGui(tk.Tk):
         try:
             self._capture_parameters_table_edits()
             write_csv_table(path, self.parameters_csv_table)
+            self._parameters_dirty = False
             self._save_run_config()
             self._set_status("Parameters saved.", "success")
         except Exception as error:  # noqa: BLE001 - GUI should surface save problems.
@@ -1677,6 +1719,7 @@ class ConvoySimGui(tk.Tk):
             self._capture_parameters_table_edits()
             write_csv_table(path, self.parameters_csv_table)
             self.parameters_path.set(path)
+            self._parameters_dirty = False
             self._save_run_config()
             self._set_status("Parameters saved.", "success")
         except Exception as error:  # noqa: BLE001 - GUI should surface save problems.
@@ -1721,6 +1764,8 @@ class ConvoySimGui(tk.Tk):
             return
         try:
             write_csv_table(path, self._table_to_csv_table(self.scenario_table))
+            self._scenario_dirty = False
+            self._update_scenario_save_buttons()
             self._save_run_config()
             self._set_status("Scenario saved.", "success")
         except Exception as error:  # noqa: BLE001 - GUI should surface save problems.
@@ -1735,6 +1780,8 @@ class ConvoySimGui(tk.Tk):
         try:
             write_csv_table(path, self._table_to_csv_table(self.scenario_table))
             self.scenario_path.set(path)
+            self._scenario_dirty = False
+            self._update_scenario_save_buttons()
             self._save_run_config()
             self._set_status("Scenario saved.", "success")
         except Exception as error:  # noqa: BLE001 - GUI should surface save problems.
@@ -1758,6 +1805,8 @@ class ConvoySimGui(tk.Tk):
         else:
             self.scenario_table.insert("", tk.END, values=values)
         self._retag_table_rows(self.scenario_table)
+        self._scenario_dirty = True
+        self._update_scenario_save_buttons()
         self._clear_results_after_input_change()
 
     def delete_scenario_rows(self) -> None:
@@ -1766,6 +1815,8 @@ class ConvoySimGui(tk.Tk):
         for item_id in self.scenario_table.selection():
             self.scenario_table.delete(item_id)
         self._retag_table_rows(self.scenario_table)
+        self._scenario_dirty = True
+        self._update_scenario_save_buttons()
         self._clear_results_after_input_change()
 
     def _begin_parameter_cell_edit(self, event: tk.Event) -> None:
@@ -1803,6 +1854,8 @@ class ConvoySimGui(tk.Tk):
             table.item(row_id, values=values)
             self._parameter_edit_entry.destroy()
             self._parameter_edit_entry = None
+            if table is self.parameters_table:
+                self._parameters_dirty = True
 
         entry.bind("<Return>", commit)
         entry.bind("<FocusOut>", commit)
@@ -1851,6 +1904,8 @@ class ConvoySimGui(tk.Tk):
             self.scenario_table.item(row_id, values=values)
             self._scenario_edit_widget.destroy()
             self._scenario_edit_widget = None
+            self._scenario_dirty = True
+            self._update_scenario_save_buttons()
             self._clear_results_after_input_change()
 
         editor.bind("<Return>", commit)
@@ -1862,7 +1917,7 @@ class ConvoySimGui(tk.Tk):
         output_path = Path(self.output_path.get())
         if output_path.exists():
             self._load_output_table(output_path)
-            self._results_available = True
+            # _results_available stays False — view buttons stay disabled until user runs simulation this session
         log_path = Path(self.log_path.get())
         if log_path.exists():
             self._load_log_file(log_path)
@@ -1997,6 +2052,7 @@ class ConvoySimGui(tk.Tk):
             ),
             width=1220,
             height=120,
+            y_max_cap=40.0,
         )
         self.gap23_chart = ConvoyTimelineChart(
             charts_frame,
@@ -2012,6 +2068,7 @@ class ConvoySimGui(tk.Tk):
             ),
             width=1220,
             height=120,
+            y_max_cap=40.0,
         )
         velocity_series_list = [ChartSeries("Truck1 velocity", "#333333", lambda row: row.truck1_velocity_kph)]
         if self.show_truck2_velocity_var.get():
@@ -2056,7 +2113,11 @@ class ConvoySimGui(tk.Tk):
         self.time_scale.pack(fill=tk.X, padx=(int(CHART_LEFT_PX), int(CHART_RIGHT_MARGIN_PX)), pady=(6, 8))
         self.visualization_window.after_idle(self._apply_visualization_divider_position)
         self.legend_frame = self._build_visualization_legend(self.visualization_window)
-        self.legend_frame.pack(fill=tk.X, padx=8, pady=(0, 8))
+        self.legend_frame.pack(fill=tk.X, padx=8, pady=(0, 8), before=self.visualization_pane)
+        self.visualization_window.bind("<Left>", lambda _e: self._keyboard_viz_jump(-1.0))
+        self.visualization_window.bind("<Right>", lambda _e: self._keyboard_viz_jump(1.0))
+        self.visualization_window.bind("<Home>", lambda _e: self.stop_visualization())
+        self.visualization_window.bind("<End>", lambda _e: self._keyboard_viz_jump_to_end())
         if self.visualization_rows:
             self._set_visualization_rows(self.visualization_rows)
         else:
@@ -2297,13 +2358,26 @@ class ConvoySimGui(tk.Tk):
         self.pause_visualization()
         self._draw_visualization_frame(self.current_frame_index + 1)
 
+    def _keyboard_viz_jump(self, delta_seconds: float) -> None:
+        if not self.visualization_rows:
+            return
+        current_time = self.visualization_rows[self.current_frame_index].time_s
+        self.pause_visualization()
+        self._draw_visualization_frame(nearest_row_index(self.visualization_rows, current_time + delta_seconds))
+
+    def _keyboard_viz_jump_to_end(self) -> None:
+        if not self.visualization_rows:
+            return
+        self.pause_visualization()
+        self._draw_visualization_frame(len(self.visualization_rows) - 1)
+
     def toggle_visualization_legend(self) -> None:
         if self.legend_frame is None:
             return
         if self.legend_frame.winfo_ismapped():
             self.legend_frame.pack_forget()
         else:
-            self.legend_frame.pack(fill=tk.X, padx=8, pady=(0, 8))
+            self.legend_frame.pack(fill=tk.X, padx=8, pady=(0, 8), before=self.visualization_pane)
 
     def open_state_machine_help(self) -> None:
         try:

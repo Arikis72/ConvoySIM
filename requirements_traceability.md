@@ -57,6 +57,13 @@ Section-level entries cover the whole section when items are not yet individuall
 | REQ-21-04 | §21 GUI — Log tab | Time-sorted, truck-colored rows, compact state icons | ✅ | `tests/` — log sorting tests | — |
 | REQ-21-05 | §21 GUI — status line | Inline status (no modal message boxes) | ✅ | `tests/` | — |
 | REQ-21-06 | §21 GUI — file memory | `convoysim.ini` remembers last paths, scenario name | ✅ | `tests/` | — |
+| REQ-21-07 | §21 GUI — gap chart Y-axis cap | Gap charts capped at 120% of max gap, hard limit 40 m | ✅ | Manual review 2026-05-31; `y_max_cap=40.0` in all gap `ConvoyTimelineChart` instances | — |
+| REQ-21-08 | §21 GUI — status label visibility | "status/command/violation" label clamped within canvas bounds at all heights | ✅ | Manual review 2026-05-31; `clamped_y = min(y, self.height - 80)` in `_draw_origin_labels` | — |
+| REQ-21-09 | §21 GUI — view buttons require current run | Open Visualization / Open Charts disabled until simulation run this session | ✅ | Manual review 2026-05-31; removed `_results_available = True` from `_load_previous_run_files` | — |
+| REQ-21-10 | §21 GUI — legend always visible | Toggle Legend packs before pane so legend is never obscured | ✅ | Manual review 2026-05-31; `before=self.pane` / `before=self.visualization_pane` in all legend pack calls | — |
+| REQ-21-11 | §21 GUI — scenario save state | Scenario Save/Save As disabled when no unsaved changes; enabled on edit/insert/delete | ✅ | Manual review 2026-05-31; `_scenario_dirty` flag + `_update_scenario_save_buttons()` | — |
+| REQ-21-12 | §21 GUI — unsaved parameters warning | Inline warning blocks simulation run when Parameters tab has unsaved changes | ✅ | Manual review 2026-05-31; `_parameters_dirty` flag + early return in `run_simulation` | — |
+| REQ-21-13 | §21 GUI — visualization keyboard shortcuts | ← back 1s, → forward 1s, Home = start, End = end; both Stage C and Bulk visualization | ✅ | Manual review 2026-05-31; window-level `bind` calls + `_keyboard_viz_jump` / `_keyboard_jump` methods | — |
 | REQ-22 | §22 Stage B optimization | Parameter sweep, cost functions, bulk scenarios, results output | ✅ | `tests/` — Stage B/bulk tests | |
 | REQ-23 | §23 Stage C visualization | Straight-line replay, playback controls, gap charts, velocity chart, Help | ✅ | `tests/` — Stage C helper tests | UI/UX review needed |
 | REQ-24 | §24 Validation requirements | Validation steps before any release | ✅ | See `test_strategy.md` | — |
@@ -80,3 +87,4 @@ Section-level entries cover the whole section when items are not yet individuall
 - Items marked ✅ without specific test citation → general suite coverage; see `test_strategy.md` for REQ-to-test mapping.
 - UI/UX rows marked "UI/UX review needed" require the sanctioned human checkpoint (§0 of AGENTS.md) before being finalized ✅.
 - `> ASSUMPTION:` Individual REQ IDs within sections have not been enumerated for §21–§23 GUI requirements — only section-level IDs assigned. Enumerate sub-items as new GUI requirements are added.
+- BUG-003 UI/UX review completed 2026-05-31: user ran simulation and reported 7 issues; all fixed and tracked as REQ-21-07 through REQ-21-13. REQ-21-01, REQ-21-02, REQ-21-23 UI/UX review notes remain (ongoing baseline review).

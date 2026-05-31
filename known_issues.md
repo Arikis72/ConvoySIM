@@ -21,7 +21,6 @@ related: ["[[AGENTS]]", "[[requirements_traceability]]", "[[test_strategy]]"]
 |--------|:------:|---------|------------|--------------|-----------|
 | BUG-001 | 🔴 | Leader resume behavior after communication override is undefined — not yet implemented | Behavior is still an open question in SimRequirements.md §25 | `simulation.py` — communication logic | REQ-12, REQ-25 |
 | BUG-002 | 🔴 | True pause/stop controls do not interrupt an in-progress Stage A simulation run | Stage A execution is synchronous; Stage C plays back completed rows only | `gui.py`, `simulation.py` | REQ-25 |
-| BUG-003 | 🔴 | Stage C popup, Bulk Simulation tab, and Cost Weight tab have not had a manual UI/UX review this cycle | No test coverage for visual layout and interaction | `gui.py`, `visualization.py` | REQ-21, REQ-22, REQ-23 |
 
 ---
 
@@ -31,6 +30,7 @@ related: ["[[AGENTS]]", "[[requirements_traceability]]", "[[test_strategy]]"]
 |--------|:------:|---------|------------|-----|-----------------|
 | BUG-C01 | ✅ | Gap arrow distance labels appeared below arrow lines instead of above | `label_y` used `y + 12.0` (downward in Tkinter coords) instead of `y - 12.0` | Fixed `gap_arrow_coordinates()` and `orange_trigger_gap_arrow_coordinates()` in `visualization.py` | `test_gap_arrow_coordinates_use_follower_front_and_leading_rear`, `test_orange_trigger_gap_arrow_uses_required_gap_from_follower_front` in `tests/test_visualization.py` |
 | BUG-C02 | ✅ | Truck #1 FORT fired once then allowed leader to resume from velocity schedule | FORT was implemented as a single-step event | Changed to permanent latch: `truck1_fort_latched` never reset after trigger; leader profile ignored after FORT | `test_truck1_fort_latches_to_full_stop_and_does_not_resume` in `tests/test_simulation.py` |
+| BUG-C03 | ✅ | Stage C popup, Bulk Simulation tab, Cost Weight tab — 7 UI/UX issues found in manual review (2026-05-31) | No prior UI/UX review; layout and state-management gaps | (1) Gap chart Y-axis capped at 120%/40m — `y_max_cap=40.0` on all gap charts; (2) status/command label clamped in `_draw_origin_labels`; (3) view buttons start disabled — removed `_results_available=True` from `_load_previous_run_files`; (4) legend repacked `before=pane`; (5) scenario Save/Save As dirty-state tracking; (6) parameters dirty warning blocks run; (7) keyboard shortcuts ←/→/Home/End on both popup windows | REQ-21-07 through REQ-21-13 implemented; manual review confirmed fixes |
 
 ---
 

@@ -1,3 +1,12 @@
+---
+title: ConvoySIM — Convoy Behavior Logic
+type: guide
+date: 2026-05-22
+description: Plain-language summary of current three-truck convoy behavior for users and maintainers. SimRequirements.md is the formal source of truth.
+tags: [convoysim, logic, guide]
+related: ["[[SimRequirements]]", "[[AGENTS]]", "[[STATUS]]"]
+---
+
 # ConvoyLogic.md
 
 This file summarizes the current convoy behavior in plain language. Keep it updated whenever follower logic, scenario events, or logic-related output fields change.

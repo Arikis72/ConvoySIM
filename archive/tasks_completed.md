@@ -11,6 +11,12 @@ related: ["[[TASKS]]"]
 
 > Archived from `TASKS.md` on 2026-05-30. See [[TASKS]] for current open tasks.
 
+## Completed tasks (archived 2026-05-31)
+
+- [x] Complete manual UI/UX review: Stage C popup, Bulk Simulation tab, Cost Weight tab (BUG-003). User ran simulation 2026-05-31; 7 issues identified and fixed; tracked as REQ-21-07 through REQ-21-13; BUG-003 closed as BUG-C03 in `known_issues.md`.
+- [x] Add unsaved parameters warning before running simulation (REQ-21-12). Inline status warning blocks run when `_parameters_dirty` is True.
+- [x] Add keyboard shortcuts to Stage C and Bulk visualization popups: ← back 1s, → forward 1s, Home = start, End = end (REQ-21-13).
+
 ## Completed tasks (archived 2026-05-30)
 
 - [x] Created base Markdown documentation files.
