@@ -24,6 +24,12 @@ desktop.ini
 *.swp
 *.swo
 
+# Personal notes — never commit passwords, tokens, or secrets
+myNotes.md
+*.env
+*.env.local
+.env*
+
 # Test artifacts
 .coverage
 htmlcov/
