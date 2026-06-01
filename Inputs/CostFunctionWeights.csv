@@ -1,3 +1,8 @@
 Cost_Function,Weight
-Red braking count,1.0
-Accidents,1000.0
+Red braking count,200.0
+Accidents,200.0
+RMS Gap Error,200.0
+TTC Violation Count,200.0
+RMS Relative Speed,200.0
+Mean Convoy Gap,200.0
+RMS Follower Acceleration,200.0

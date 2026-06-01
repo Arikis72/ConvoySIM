@@ -10,7 +10,7 @@ related: ["[[AGENTS]]", "[[requirements_traceability]]", "[[known_issues]]", "[[
 # ConvoySIM — Current Status
 
 > **Snapshot only.** Replace this content each session. History lives in `progress.md`.
-> Last updated: 2026-05-31 (session 2)
+> Last updated: 2026-06-01
 
 ---
 
@@ -23,9 +23,9 @@ related: ["[[AGENTS]]", "[[requirements_traceability]]", "[[known_issues]]", "[[
 | Stage B — Parameter optimization (sweep + bulk simulations) | ✅ | Single-parameter bulk runs; multi-parameter optimization is future work |
 | Stage C — Visualization popup | ✅ | Full playback, gap/velocity charts, state-machine Help; UI/UX review done 2026-05-31 |
 
-**Test suite:** Last run 2026-05-31 — 93 tests; 4 failures + 32 errors are pre-existing (missing `Inputs/stage_a_example_inputs/parameters.csv` and `braking_distance_table.csv` — path mismatch in test fixtures, not introduced by this session). No new failures. See `test_strategy.md` for module coverage.
+**Test suite:** Last run 2026-06-01 — 107 tests; 4 failures + 33 errors are pre-existing (missing `Inputs/stage_a_example_inputs/parameters.csv` and `braking_distance_table.csv` — path mismatch in test fixtures, not introduced by this session). No new failures. See `test_strategy.md` for module coverage.
 
-**Requirements:** See `requirements_traceability.md` for REQ ID status. Open items: REQ-25 (leader resume after comms override — frozen; true pause/stop for real-time mode). REQ-21-15 through REQ-21-21 added and implemented this session. REQ-21-14 through REQ-21-21 pending manual UI/UX review.
+**Requirements:** See `requirements_traceability.md` for REQ ID status. Open items: REQ-25 (leader resume after comms override — frozen; true pause/stop for real-time mode). REQ-21-22 (scenario CSV initial gaps override) and REQ-21-23 (GUI layout swap) added and implemented this session.
 
 ---
 

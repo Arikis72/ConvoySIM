@@ -1,5 +1,7 @@
 """ConvoySIM core package."""
 
+__version__ = "1.0.1"
+
 from convoysim.braking import BrakingDistanceTable, BrakingType
 from convoysim.charts import write_stage_a_charts_html
 from convoysim.leader_profile import LeaderProfile, ProfilePoint

@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 import argparse
 import csv
+import math
 import re
 
 from convoysim.braking import BrakingDistanceTable
@@ -27,6 +28,12 @@ _SWEEP_PARAMETER_MAP = {
 
 _COST_FUNCTION_RED_BRAKING = "Red braking count"
 _COST_FUNCTION_ACCIDENTS = "Accidents"
+_COST_FUNCTION_RMS_GAP_ERROR = "RMS Gap Error"
+_COST_FUNCTION_TTC_VIOLATION = "TTC Violation Count"
+_COST_FUNCTION_RMS_REL_SPEED = "RMS Relative Speed"
+_COST_FUNCTION_MEAN_CONVOY_GAP = "Mean Convoy Gap"
+_COST_FUNCTION_RMS_ACCELERATION = "RMS Follower Acceleration"
+_TTC_THRESHOLD_S = 2.0
 DEFAULT_COST_FUNCTION_WEIGHTS_PATH = "CostFunctionWeights.csv"
 _WEIGHTS_USED_FILENAME = "CostFunctionWeights_Used.csv"
 _BULK_RESULT_COLUMNS = (
@@ -42,6 +49,11 @@ _BULK_RESULT_COLUMNS = (
     "Truck2_Accident_Count",
     "Truck3_Accident_Count",
     "Total_Accident_Count",
+    "RMS_Gap_Error_m",
+    "TTC_Violation_Count",
+    "RMS_Relative_Speed_kph",
+    "Mean_Convoy_Gap_m",
+    "RMS_Follower_Acceleration_mps2",
     "Run_Output_CSV",
     "Failure_Reason",
 )
@@ -112,7 +124,12 @@ class BulkSimulationRunRow:
     truck2_accident_count: int
     truck3_accident_count: int
     total_accident_count: int
-    run_output_csv: str
+    rms_gap_error_m: float = 0.0
+    ttc_violation_count: int = 0
+    rms_relative_speed_kph: float = 0.0
+    mean_convoy_gap_m: float = 0.0
+    rms_follower_acceleration_mps2: float = 0.0
+    run_output_csv: str = ""
     failure_reason: str = ""
 
 
@@ -179,7 +196,7 @@ def run_stage_b_optimization_from_files(
     candidates = load_optimization_candidates_csv(sweep_path)
     braking_table = BrakingDistanceTable.from_csv(braking_table_path) if braking_table_path is not None else None
     result = run_stage_b_optimization(
-        loaded.initial_conditions,
+        timeline.apply_initial_gaps(loaded.initial_conditions),
         loaded.simulation_parameters,
         timeline,
         candidates,
@@ -194,7 +211,20 @@ def bulk_parameter_names() -> tuple[str, ...]:
 
 
 def bulk_cost_function_names() -> tuple[str, ...]:
-    return (_COST_FUNCTION_RED_BRAKING, _COST_FUNCTION_ACCIDENTS)
+    return (
+        _COST_FUNCTION_RED_BRAKING,
+        _COST_FUNCTION_ACCIDENTS,
+        _COST_FUNCTION_RMS_GAP_ERROR,
+        _COST_FUNCTION_TTC_VIOLATION,
+        _COST_FUNCTION_RMS_REL_SPEED,
+        _COST_FUNCTION_MEAN_CONVOY_GAP,
+        _COST_FUNCTION_RMS_ACCELERATION,
+    )
+
+
+def bulk_cost_function_is_count_based(name: str) -> bool:
+    """Return True for cost functions where non-zero means a problem event occurred (row should be highlighted)."""
+    return name in (_COST_FUNCTION_RED_BRAKING, _COST_FUNCTION_ACCIDENTS, _COST_FUNCTION_TTC_VIOLATION)
 
 
 def load_cost_function_weights_csv(path: str | Path) -> dict[str, float]:
@@ -286,18 +316,27 @@ def run_bulk_simulations_from_files(
             try:
                 timeline = ScenarioTimeline.from_csv(scenario)
                 parameters = _apply_bulk_parameter(loaded.simulation_parameters, parameter_name, parameter_value)
-                simulation = run_basic_simulation(loaded.initial_conditions, parameters, timeline, braking_table)
+                simulation = run_basic_simulation(timeline.apply_initial_gaps(loaded.initial_conditions), parameters, timeline, braking_table)
                 simulation.write_csv(run_output)
                 truck2_count, truck3_count = red_braking_event_counts(simulation)
                 truck2_accidents, truck3_accidents = accident_event_counts(simulation)
                 total_red_braking_count = truck2_count + truck3_count
                 total_accident_count = truck2_accidents + truck3_accidents
-                total_weighted_cost = _total_weighted_cost(
-                    cost_functions,
-                    cost_function_weights,
-                    total_red_braking_count,
-                    total_accident_count,
-                )
+                rms_gap = rms_gap_error(simulation, parameters.target_gap_m)
+                ttc_violations = ttc_violation_count(simulation)
+                rms_rel_spd = rms_relative_speed(simulation)
+                convoy_gap = mean_convoy_gap(simulation)
+                rms_accel = rms_follower_acceleration(simulation)
+                metric_values = {
+                    _COST_FUNCTION_RED_BRAKING: float(total_red_braking_count),
+                    _COST_FUNCTION_ACCIDENTS: float(total_accident_count),
+                    _COST_FUNCTION_RMS_GAP_ERROR: rms_gap,
+                    _COST_FUNCTION_TTC_VIOLATION: float(ttc_violations),
+                    _COST_FUNCTION_RMS_REL_SPEED: rms_rel_spd,
+                    _COST_FUNCTION_MEAN_CONVOY_GAP: convoy_gap,
+                    _COST_FUNCTION_RMS_ACCELERATION: rms_accel,
+                }
+                total_weighted_cost = _total_weighted_cost(cost_functions, cost_function_weights, metric_values)
                 rows.append(
                     BulkSimulationRunRow(
                         parameter_name=parameter_name,
@@ -312,6 +351,11 @@ def run_bulk_simulations_from_files(
                         truck2_accident_count=truck2_accidents,
                         truck3_accident_count=truck3_accidents,
                         total_accident_count=total_accident_count,
+                        rms_gap_error_m=rms_gap,
+                        ttc_violation_count=ttc_violations,
+                        rms_relative_speed_kph=rms_rel_spd,
+                        mean_convoy_gap_m=convoy_gap,
+                        rms_follower_acceleration_mps2=rms_accel,
                         run_output_csv=str(run_output),
                     )
                 )
@@ -363,6 +407,57 @@ def accident_event_counts(simulation: SimulationResult) -> tuple[int, int]:
         _accident_event_count(tuple(row.truck2_gap_m for row in simulation.rows)),
         _accident_event_count(tuple(row.truck3_gap_m for row in simulation.rows)),
     )
+
+
+def rms_gap_error(simulation: SimulationResult, target_gap_m: float) -> float:
+    if not simulation.rows:
+        return 0.0
+    squared_errors = [
+        (row.truck2_gap_m - target_gap_m) ** 2
+        for row in simulation.rows
+    ] + [
+        (row.truck3_gap_m - target_gap_m) ** 2
+        for row in simulation.rows
+    ]
+    return math.sqrt(sum(squared_errors) / len(squared_errors))
+
+
+def ttc_violation_count(simulation: SimulationResult) -> int:
+    count = 0
+    for row in simulation.rows:
+        for gap_m, rel_v_kph in (
+            (row.truck2_gap_m, row.truck2_relative_velocity_kph),
+            (row.truck3_gap_m, row.truck3_relative_velocity_kph),
+        ):
+            rel_v_mps = rel_v_kph / 3.6
+            if rel_v_mps > 1e-9 and gap_m > 0:
+                if gap_m / rel_v_mps < _TTC_THRESHOLD_S:
+                    count += 1
+    return count
+
+
+def rms_relative_speed(simulation: SimulationResult) -> float:
+    if not simulation.rows:
+        return 0.0
+    squared = [row.truck2_relative_velocity_kph ** 2 for row in simulation.rows] + [
+        row.truck3_relative_velocity_kph ** 2 for row in simulation.rows
+    ]
+    return math.sqrt(sum(squared) / len(squared))
+
+
+def mean_convoy_gap(simulation: SimulationResult) -> float:
+    if not simulation.rows:
+        return 0.0
+    return sum(row.truck2_gap_m + row.truck3_gap_m for row in simulation.rows) / len(simulation.rows)
+
+
+def rms_follower_acceleration(simulation: SimulationResult) -> float:
+    if not simulation.rows:
+        return 0.0
+    squared = [row.truck2_acceleration_mps2 ** 2 for row in simulation.rows] + [
+        row.truck3_acceleration_mps2 ** 2 for row in simulation.rows
+    ]
+    return math.sqrt(sum(squared) / len(squared))
 
 
 def _candidate_from_row(row: dict[str, str], row_number: int) -> OptimizationCandidate:
@@ -459,26 +554,30 @@ def _accident_event_count(gaps_m: tuple[float, ...]) -> int:
     return count
 
 
-def _selected_cost_value(cost_function: str, total_red_braking_count: int, total_accident_count: int) -> int:
+def bulk_row_cost_value(row: BulkSimulationRunRow, cost_function: str) -> float:
+    if cost_function == _COST_FUNCTION_RED_BRAKING:
+        return float(row.total_red_braking_count)
     if cost_function == _COST_FUNCTION_ACCIDENTS:
-        return total_accident_count
-    return total_red_braking_count
-
-
-def bulk_row_cost_value(row: BulkSimulationRunRow, cost_function: str) -> int:
-    return _selected_cost_value(cost_function, row.total_red_braking_count, row.total_accident_count)
+        return float(row.total_accident_count)
+    if cost_function == _COST_FUNCTION_TTC_VIOLATION:
+        return float(row.ttc_violation_count)
+    if cost_function == _COST_FUNCTION_RMS_GAP_ERROR:
+        return row.rms_gap_error_m
+    if cost_function == _COST_FUNCTION_RMS_REL_SPEED:
+        return row.rms_relative_speed_kph
+    if cost_function == _COST_FUNCTION_MEAN_CONVOY_GAP:
+        return row.mean_convoy_gap_m
+    if cost_function == _COST_FUNCTION_RMS_ACCELERATION:
+        return row.rms_follower_acceleration_mps2
+    return float(row.total_red_braking_count)
 
 
 def _total_weighted_cost(
     cost_functions: tuple[str, ...],
     cost_function_weights: dict[str, float],
-    total_red_braking_count: int,
-    total_accident_count: int,
+    metric_values: dict[str, float],
 ) -> float:
-    return sum(
-        _selected_cost_value(cost_function, total_red_braking_count, total_accident_count) * cost_function_weights[cost_function]
-        for cost_function in cost_functions
-    )
+    return sum(metric_values.get(cf, 0.0) * cost_function_weights[cf] for cf in cost_functions)
 
 
 def _validate_selected_cost_weights(cost_functions: tuple[str, ...], cost_function_weights: dict[str, float]) -> None:
@@ -530,6 +629,11 @@ def _bulk_row_to_csv(row: BulkSimulationRunRow) -> dict[str, str]:
         "Truck2_Accident_Count": str(row.truck2_accident_count),
         "Truck3_Accident_Count": str(row.truck3_accident_count),
         "Total_Accident_Count": str(row.total_accident_count),
+        "RMS_Gap_Error_m": f"{row.rms_gap_error_m:.3f}",
+        "TTC_Violation_Count": str(row.ttc_violation_count),
+        "RMS_Relative_Speed_kph": f"{row.rms_relative_speed_kph:.3f}",
+        "Mean_Convoy_Gap_m": f"{row.mean_convoy_gap_m:.3f}",
+        "RMS_Follower_Acceleration_mps2": f"{row.rms_follower_acceleration_mps2:.3f}",
         "Run_Output_CSV": row.run_output_csv,
         "Failure_Reason": row.failure_reason if row.status == "Failed" else "",
     }

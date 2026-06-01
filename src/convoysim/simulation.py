@@ -185,12 +185,19 @@ def run_basic_simulation(
     truck1_events = {event.time_s: event.event for event in timeline.truck1_events()}
     truck2_events = {event.time_s: event.event for event in timeline.truck2_image_events()}
     truck3_events = {event.time_s: event.event for event in timeline.truck3_image_events()}
+    _orange_brake_windows = timeline.orange_brake_windows()
     history1 = [TruckSnapshot(0.0, truck1.position_m, truck1.velocity_mps)]
     history2 = [TruckSnapshot(0.0, truck2.position_m, truck2.velocity_mps)]
     history3 = [TruckSnapshot(0.0, truck3.position_m, truck3.velocity_mps)]
     rows: list[SimulationRow] = []
     log_context = SimulationLogContext(rows=[], braking_fallback_keys=set())
     truck1_fort_latched = False  # Once FORT activates it never releases; truck brakes to stop and holds
+
+    def _orange_brake_kind(t: float) -> str:
+        # Use a small epsilon on the window start to tolerate float accumulation in
+        # the simulation loop (time_s may be e.g. 41.9999999... instead of 42.0).
+        _EPS = 1e-6
+        return "orange_brake" if any(s - _EPS <= t < e + _EPS for s, e in _orange_brake_windows) else ""
 
     time_s = 0.0
     output_index = 0
@@ -221,6 +228,7 @@ def run_basic_simulation(
                     parameters=parameters,
                     truck_length_m=initial.truck_length_m,
                     truck1_in_fort=False,
+                    leader_command_kind=_orange_brake_kind(time_s),
                 )
             )
             output_index += 1
@@ -347,6 +355,7 @@ def run_basic_simulation(
                     parameters=parameters,
                     truck_length_m=initial.truck_length_m,
                     truck1_in_fort=truck1_in_fort,
+                    leader_command_kind=_orange_brake_kind(time_s),
                 )
             )
             output_index += 1
@@ -365,7 +374,7 @@ def run_basic_simulation_from_files(
     loaded = load_parameters_csv(parameters_path)
     timeline = ScenarioTimeline.from_csv(scenario_path)
     braking_table = BrakingDistanceTable.from_csv(braking_table_path) if braking_table_path is not None else None
-    result = run_basic_simulation(loaded.initial_conditions, loaded.simulation_parameters, timeline, braking_table)
+    result = run_basic_simulation(timeline.apply_initial_gaps(loaded.initial_conditions), loaded.simulation_parameters, timeline, braking_table)
     result.write_csv(output_path)
     if log_output_path is not None:
         result.write_log_csv(log_output_path)

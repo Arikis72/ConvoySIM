@@ -25,7 +25,7 @@ Communication reliability,100,%,Message approval reliability
 Convoy target speed,10,kph,Default convoy target speed
 Target gap,10,m,Desired nominal convoy gap
 Road type,Asphalt,text,Selected braking-table road type
-Orange deceleration,1,m/s^2,Fallback controlled braking if table lookup is unavailable
+Orange deceleration,1.5,m/s^2,Fallback controlled braking if table lookup is unavailable
 Green acceleration,0.8,m/s^2,Follower acceleration when resuming movement
 Start moving gap,10,m,Minimum measured gap required before a stopped follower starts moving
 Optimal acceleration,0.8,m/s^2,Tunable acceleration for closing gaps and leader behavior

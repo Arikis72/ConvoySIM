@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import csv
+import datetime
 import os
 import threading
 import tkinter as tk
@@ -36,6 +37,7 @@ from convoysim.optimization import (
     BulkSimulationResult,
     bulk_row_cost_value,
     bulk_cost_function_names,
+    bulk_cost_function_is_count_based,
     bulk_parameter_names,
     generate_parameter_values,
     load_cost_function_weights_csv,
@@ -76,6 +78,9 @@ from convoysim.visualization import (
     truck_color_for_label,
 )
 
+_DEPLOY_TIME = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+_APP_VERSION = "1.0.1"
+
 _TOTAL_WEIGHTED_COST_LABEL = "Total weighted cost"
 _BULK_COST_CHART_JPG = "Bulk_Cost_Function_Totals_Chart.jpg"
 _BULK_WEIGHTED_CHART_JPG = "Bulk_Total_Weighted_Cost_Chart.jpg"
@@ -83,6 +88,410 @@ _BULK_WEIGHTED_CHART_JPG = "Bulk_Total_Weighted_Cost_Chart.jpg"
 
 def playback_delay_ms(speed: float, base_delay_ms: int = 100) -> int:
     return max(1, int(round(base_delay_ms / max(0.1, speed))))
+
+
+def _build_cost_function_help_html() -> str:
+    sections = [
+        {
+            "id": "safety",
+            "title": "Safety Metrics",
+            "color": "#b00020",
+            "bg": "#fff5f5",
+            "border": "#f5c2c7",
+            "functions": [
+                {
+                    "name": "Accidents",
+                    "unit": "count",
+                    "badge": "Hard gate",
+                    "badge_color": "#b00020",
+                    "purpose": (
+                        "Counts actual collisions — moments where a follower's gap to the vehicle ahead "
+                        "drops to zero or below. Even a single collision is a critical failure. "
+                        "This metric should be treated as a hard pass/fail gate, not just a cost penalty: "
+                        "a run with any accidents should be disqualified regardless of its score on other metrics."
+                    ),
+                    "formula": "accident_count += 1 &nbsp;for each timestep where gap &le; 0",
+                    "calculation": (
+                        "Each time either follower's gap reaches zero or goes negative, that counts as one "
+                        "collision event (edge-triggered: only the first timestep of each collision is counted). "
+                        "Events are summed across Truck&nbsp;2 and Truck&nbsp;3."
+                    ),
+                    "interpretation": "0 = safe run. Any value &gt; 0 = collision occurred.",
+                },
+                {
+                    "name": "TTC Violation Count",
+                    "unit": "count",
+                    "badge": "Safety",
+                    "badge_color": "#b00020",
+                    "purpose": (
+                        "Counts how often a dangerous closing situation occurs — specifically when a follower "
+                        "is catching up to the vehicle ahead fast enough that they would collide in under 2&nbsp;seconds "
+                        "if both vehicles continued at their current speeds. "
+                        "This is a leading indicator of near-misses and unsafe dynamics, and will fire "
+                        "<em>before</em> an actual accident occurs."
+                    ),
+                    "formula": "TTC = gap / closing_speed_m_s &nbsp;&nbsp;(only when follower is faster)",
+                    "calculation": (
+                        "At each timestep, time-to-collision (TTC) is computed for each follower as: "
+                        "<code>gap&nbsp;&divide;&nbsp;closing&nbsp;speed&nbsp;(m/s)</code>, "
+                        "but only when the follower is moving faster than the vehicle directly ahead "
+                        "(i.e., the gap is shrinking). "
+                        "Each timestep where TTC &lt; 2&nbsp;s counts as one violation. "
+                        "Violations are summed across both followers."
+                    ),
+                    "interpretation": "Lower is safer. 0 = no dangerous closing events during the run.",
+                },
+            ],
+        },
+        {
+            "id": "gap",
+            "title": "Gap Keeping",
+            "color": "#1565c0",
+            "bg": "#f0f4ff",
+            "border": "#b3c6f5",
+            "functions": [
+                {
+                    "name": "Red Braking Count",
+                    "unit": "count",
+                    "badge": "Control event",
+                    "badge_color": "#c0392b",
+                    "purpose": (
+                        "Counts how often a follower truck is forced into emergency braking because it got "
+                        "dangerously close to the vehicle in front. "
+                        "Frequent red braking indicates the convoy is reacting too slowly, the gap parameters "
+                        "are too tight for the scenario, or the controller is oscillating near the safety threshold."
+                    ),
+                    "formula": "count += 1 &nbsp;on each transition into RED&nbsp;BRAKING state",
+                    "calculation": (
+                        "Each time either follower transitions into the <code>FOLLOWING_RED_BRAKING_TO_STOP</code> "
+                        "state, that counts as one event (edge-triggered: only the first timestep of each "
+                        "braking episode is counted). Events are counted separately for Truck&nbsp;2 and Truck&nbsp;3 "
+                        "and summed."
+                    ),
+                    "interpretation": "Lower is better. 0 = no emergency braking occurred.",
+                },
+                {
+                    "name": "RMS Gap Error",
+                    "unit": "metres",
+                    "badge": "Gap quality",
+                    "badge_color": "#1565c0",
+                    "purpose": (
+                        "Measures how accurately the convoy maintains the configured target gap throughout "
+                        "the run. A high value means followers are spending significant time either too close "
+                        "to or too far from the target gap — indicating poor gap-keeping performance. "
+                        "Unlike the accident count, this metric captures continuous quality even when no "
+                        "violations occur."
+                    ),
+                    "formula": "J<sub>gap</sub> = &radic;( mean( (d<sub>i</sub>(t) &minus; d<sub>target</sub>)<sup>2</sup> ) )",
+                    "calculation": (
+                        "At every simulation timestep, the error <code>gap &minus; target_gap_m</code> is computed "
+                        "for each follower. These errors are squared, pooled across all timesteps and both "
+                        "followers (Truck&nbsp;2 and Truck&nbsp;3), averaged, then square-rooted to give "
+                        "the RMS. Result is in metres."
+                    ),
+                    "interpretation": "Lower is better. 0 = perfect gap maintenance at every timestep.",
+                },
+            ],
+        },
+        {
+            "id": "cohesion",
+            "title": "Convoy Cohesion",
+            "color": "#2e7d32",
+            "bg": "#f0fff2",
+            "border": "#a8d5ab",
+            "functions": [
+                {
+                    "name": "RMS Relative Speed",
+                    "unit": "km/h",
+                    "badge": "Cohesion",
+                    "badge_color": "#2e7d32",
+                    "purpose": (
+                        "Measures how well the convoy moves as a cohesive unit at matching speeds. "
+                        "A high value means trucks are constantly accelerating and braking relative to each other — "
+                        "the convoy is stretching and compressing (accordion effect) rather than flowing smoothly. "
+                        "This is the primary indicator of string instability."
+                    ),
+                    "formula": "J<sub>speed</sub> = &radic;( mean( (v<sub>i</sub>(t) &minus; v<sub>i&minus;1</sub>(t))<sup>2</sup> ) )",
+                    "calculation": (
+                        "At every timestep, the speed difference between each follower and the vehicle directly "
+                        "ahead (<code>truck2_relative_velocity_kph</code>, <code>truck3_relative_velocity_kph</code>) "
+                        "is squared, pooled across all timesteps and both follower pairs, averaged, then "
+                        "square-rooted. Result is in km/h."
+                    ),
+                    "interpretation": "Lower = more cohesive convoy. 0 = all vehicles moving at exactly the same speed.",
+                },
+                {
+                    "name": "Mean Convoy Gap",
+                    "unit": "metres",
+                    "badge": "Compactness",
+                    "badge_color": "#2e7d32",
+                    "purpose": (
+                        "Reports the average total inter-vehicle space in the convoy over the entire run. "
+                        "A large value means the convoy was frequently stretched out — perhaps after "
+                        "tracking-loss events, slow re-acquisition, or overly conservative gap parameters. "
+                        "Use this as a secondary metric alongside RMS Gap Error to understand compactness."
+                    ),
+                    "formula": "J<sub>length</sub> = mean( d<sub>2</sub>(t) + d<sub>3</sub>(t) )",
+                    "calculation": (
+                        "At every timestep, the Truck&nbsp;2 gap and Truck&nbsp;3 gap are added together. "
+                        "The mean of this total gap is taken over all timesteps. "
+                        "Result is in metres."
+                    ),
+                    "interpretation": "Lower generally means a tighter convoy. Compare across parameter sweeps — the absolute value depends on target gap settings.",
+                },
+            ],
+        },
+        {
+            "id": "control",
+            "title": "Control Quality",
+            "color": "#ef6c00",
+            "bg": "#fff8f0",
+            "border": "#f5d5a8",
+            "functions": [
+                {
+                    "name": "RMS Follower Acceleration",
+                    "unit": "m/s²",
+                    "badge": "Smoothness",
+                    "badge_color": "#ef6c00",
+                    "purpose": (
+                        "Measures how smooth and comfortable the follower trucks' motion is. "
+                        "High values indicate frequent hard braking and sharp acceleration, which stresses "
+                        "actuators, wastes energy, and reflects an aggressively tuned or poorly converging "
+                        "controller. A smooth convoy scores low on this metric even under challenging scenarios."
+                    ),
+                    "formula": "J<sub>acc</sub> = &radic;( mean( a<sub>i</sub>(t)<sup>2</sup> ) )",
+                    "calculation": (
+                        "At every timestep, the accelerations of Truck&nbsp;2 and Truck&nbsp;3 are squared, "
+                        "pooled across all timesteps and both trucks, averaged, then square-rooted. "
+                        "The leader (Truck&nbsp;1) is excluded — its acceleration is set by the scenario, "
+                        "not by the controller under test. Result is in m/s²."
+                    ),
+                    "interpretation": "Lower = smoother control. Compare across runs with the same scenario to assess controller aggressiveness.",
+                },
+            ],
+        },
+    ]
+
+    def _section_html(sec: dict) -> str:
+        color = sec["color"]
+        bg = sec["bg"]
+        border = sec["border"]
+        cards = ""
+        for fn in sec["functions"]:
+            badge_html = (
+                f'<span class="badge" style="background:{fn["badge_color"]}">{fn["badge"]}</span>'
+            )
+            cards += f"""
+      <details class="card" style="border-left:4px solid {color}; background:{bg};">
+        <summary>
+          <span class="fn-name" style="color:{color}">{fn["name"]}</span>
+          {badge_html}
+          <span class="unit-tag">{fn["unit"]}</span>
+        </summary>
+        <div class="card-body">
+          <p class="purpose">{fn["purpose"]}</p>
+          <div class="formula-box"><strong>Formula:</strong> {fn["formula"]}</div>
+          <h4>How it is calculated</h4>
+          <p>{fn["calculation"]}</p>
+          <div class="interpretation"><strong>Interpretation:</strong> {fn["interpretation"]}</div>
+        </div>
+      </details>"""
+        return f"""
+  <section id="{sec["id"]}">
+    <h2 style="color:{color}; border-bottom:2px solid {border}; padding-bottom:6px">{sec["title"]}</h2>
+    {cards}
+  </section>"""
+
+    toc_items = "".join(
+        f'<li><a href="#{s["id"]}" style="color:{s["color"]}">{s["title"]}</a>'
+        + "".join(f' &nbsp;·&nbsp; <a href="#{fn["name"].lower().replace(" ","_")}">{fn["name"]}</a>' for fn in s["functions"])
+        + "</li>"
+        for s in sections
+    )
+
+    all_sections = "".join(_section_html(s) for s in sections)
+
+    overview_rows = ""
+    for s in sections:
+        for fn in s["functions"]:
+            overview_rows += (
+                f'<tr><td><a href="#{fn["name"].lower().replace(" ","_")}" style="color:{s["color"]};font-weight:600">'
+                f'{fn["name"]}</a></td>'
+                f'<td><span class="badge" style="background:{s["color"]}">{s["title"]}</span></td>'
+                f'<td>{fn["unit"]}</td>'
+                f'<td>{fn["purpose"][:100]}…</td></tr>\n'
+            )
+
+    # anchor ids need to match what TOC links to
+    all_sections_with_anchors = all_sections
+    for s in sections:
+        for fn in s["functions"]:
+            anchor_id = fn["name"].lower().replace(" ", "_")
+            all_sections_with_anchors = all_sections_with_anchors.replace(
+                f'<span class="fn-name" style="color:{s["color"]}">{fn["name"]}</span>',
+                f'<span id="{anchor_id}" class="fn-name" style="color:{s["color"]}">{fn["name"]}</span>',
+            )
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>ConvoySIM — Cost Function Reference</title>
+  <style>
+    *, *::before, *::after {{ box-sizing: border-box; }}
+    body {{
+      font-family: "Segoe UI", Arial, sans-serif;
+      font-size: 15px;
+      line-height: 1.6;
+      color: #222;
+      margin: 0;
+      background: #f7f8fa;
+    }}
+    header {{
+      background: #1a2636;
+      color: #fff;
+      padding: 18px 32px 14px;
+      display: flex;
+      align-items: baseline;
+      gap: 16px;
+    }}
+    header h1 {{ margin: 0; font-size: 1.5rem; font-weight: 700; letter-spacing: .5px; }}
+    header span {{ color: #a0b4c8; font-size: 0.9rem; }}
+    .layout {{ display: flex; gap: 0; min-height: calc(100vh - 60px); }}
+    nav {{
+      width: 240px;
+      min-width: 200px;
+      background: #fff;
+      border-right: 1px solid #dde3eb;
+      padding: 20px 16px;
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+      flex-shrink: 0;
+    }}
+    nav h3 {{ font-size: 0.78rem; text-transform: uppercase; letter-spacing: 1px; color: #888; margin: 0 0 12px; }}
+    nav ul {{ list-style: none; margin: 0; padding: 0; font-size: 0.88rem; }}
+    nav li {{ margin-bottom: 6px; line-height: 1.4; }}
+    nav a {{ text-decoration: none; }}
+    nav a:hover {{ text-decoration: underline; }}
+    main {{ flex: 1; padding: 28px 36px; max-width: 860px; }}
+    h2 {{ font-size: 1.15rem; margin: 32px 0 12px; }}
+    .overview-table {{ width: 100%; border-collapse: collapse; margin-bottom: 32px; font-size: 0.9rem; }}
+    .overview-table th {{ background: #1a2636; color: #fff; padding: 8px 12px; text-align: left; font-weight: 600; }}
+    .overview-table td {{ padding: 7px 12px; border-bottom: 1px solid #e4e8ef; vertical-align: top; }}
+    .overview-table tr:hover td {{ background: #f0f4ff; }}
+    .badge {{
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 10px;
+      color: #fff;
+      font-size: 0.75rem;
+      font-weight: 600;
+      white-space: nowrap;
+    }}
+    .unit-tag {{
+      display: inline-block;
+      margin-left: 8px;
+      padding: 1px 7px;
+      border-radius: 8px;
+      background: #e8edf5;
+      color: #555;
+      font-size: 0.78rem;
+      font-family: monospace;
+    }}
+    .card {{
+      border-radius: 6px;
+      border: 1px solid #dde3eb;
+      margin-bottom: 12px;
+      overflow: hidden;
+    }}
+    .card summary {{
+      cursor: pointer;
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      user-select: none;
+      list-style: none;
+      font-size: 1rem;
+    }}
+    .card summary::-webkit-details-marker {{ display: none; }}
+    .card summary::before {{
+      content: "▶";
+      font-size: 0.7rem;
+      color: #888;
+      transition: transform 0.15s;
+      flex-shrink: 0;
+    }}
+    .card[open] summary::before {{ transform: rotate(90deg); }}
+    .fn-name {{ font-weight: 700; font-size: 1rem; }}
+    .card-body {{ padding: 0 18px 16px 18px; }}
+    .purpose {{ margin-top: 10px; color: #333; }}
+    .formula-box {{
+      background: #1a2636;
+      color: #e0f0ff;
+      font-family: monospace;
+      font-size: 0.92rem;
+      padding: 10px 14px;
+      border-radius: 4px;
+      margin: 12px 0;
+    }}
+    h4 {{ margin: 14px 0 4px; font-size: 0.95rem; color: #444; }}
+    .interpretation {{
+      background: #f5f7fb;
+      border-left: 3px solid #aab;
+      padding: 8px 12px;
+      border-radius: 0 4px 4px 0;
+      margin-top: 10px;
+      font-size: 0.9rem;
+      color: #444;
+    }}
+    .expand-all-btn {{
+      margin-bottom: 16px;
+      background: #1a2636;
+      color: #fff;
+      border: none;
+      padding: 6px 16px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.85rem;
+    }}
+    .expand-all-btn:hover {{ background: #2a3a50; }}
+    section {{ margin-bottom: 28px; }}
+    code {{ background: #eef0f5; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }}
+  </style>
+</head>
+<body>
+<header>
+  <h1>ConvoySIM</h1>
+  <span>Cost Function Reference</span>
+</header>
+<div class="layout">
+  <nav>
+    <h3>Contents</h3>
+    <ul>{toc_items}</ul>
+  </nav>
+  <main>
+    <h2 id="overview" style="margin-top:0">Quick Overview</h2>
+    <table class="overview-table">
+      <thead><tr><th>Function</th><th>Category</th><th>Unit</th><th>Summary</th></tr></thead>
+      <tbody>{overview_rows}</tbody>
+    </table>
+
+    <button class="expand-all-btn" onclick="toggleAll(this)">Expand all</button>
+    {all_sections_with_anchors}
+  </main>
+</div>
+<script>
+  function toggleAll(btn) {{
+    const open = btn.textContent === 'Expand all';
+    document.querySelectorAll('details.card').forEach(d => d.open = open);
+    btn.textContent = open ? 'Collapse all' : 'Expand all';
+  }}
+</script>
+</body>
+</html>"""
 
 
 def _wrapped_bulk_heading(column: str) -> str:
@@ -171,7 +580,7 @@ class BulkVisualizationWindow:
         ).pack(side=tk.LEFT, padx=4)
         ttk.Checkbutton(controls, text="T2", variable=self.show_truck2_velocity_var, command=self._redraw_velocity_chart).pack(side=tk.LEFT, padx=(0, 2))
         ttk.Checkbutton(controls, text="T3", variable=self.show_truck3_velocity_var, command=self._redraw_velocity_chart).pack(side=tk.LEFT, padx=4)
-        ttk.Label(controls, textvariable=self.time_label_var).pack(side=tk.LEFT, padx=12)
+        tk.Label(controls, textvariable=self.time_label_var, font=("Arial", 18, "bold"), fg="#222").pack(side=tk.LEFT, padx=12)
         ttk.Label(controls, textvariable=self.playback_speed_label_var).pack(side=tk.LEFT, padx=(18, 4))
         ttk.Scale(
             controls,
@@ -189,7 +598,17 @@ class BulkVisualizationWindow:
         visualization_frame = ttk.Frame(self.pane)
         charts_frame = ttk.Frame(self.pane)
         self.pane.add(visualization_frame, minsize=280)
-        self.pane.add(charts_frame, minsize=180)
+        self.pane.add(charts_frame, minsize=60)
+        # Slider is packed FIRST in charts_frame so it always sits at the sash line
+        self.time_scale = ttk.Scale(
+            charts_frame,
+            from_=0.0,
+            to=rows[-1].time_s if rows else 0.0,
+            orient=tk.HORIZONTAL,
+            variable=self.time_var,
+            command=self._on_time_scale_changed,
+        )
+        self.time_scale.pack(fill=tk.X, padx=(int(CHART_LEFT_PX), int(CHART_RIGHT_MARGIN_PX)), pady=(4, 2))
         self.visualization = ConvoyPlaybackCanvas(
             visualization_frame,
             width=1220,
@@ -248,15 +667,6 @@ class BulkVisualizationWindow:
             width=1220,
             height=120,
         )
-        self.time_scale = ttk.Scale(
-            charts_frame,
-            from_=0.0,
-            to=rows[-1].time_s if rows else 0.0,
-            orient=tk.HORIZONTAL,
-            variable=self.time_var,
-            command=self._on_time_scale_changed,
-        )
-        self.time_scale.pack(fill=tk.X, padx=(int(CHART_LEFT_PX), int(CHART_RIGHT_MARGIN_PX)), pady=(6, 8))
         self.legend_frame = self._build_legend(self.window)
         self.legend_frame.pack(fill=tk.X, padx=8, pady=(0, 8), before=self.pane)
         self.window.bind("<Left>", lambda _e: self._keyboard_jump(-1.0))
@@ -314,7 +724,7 @@ class BulkVisualizationWindow:
 
     def _set_chart_visible(self, chart: ConvoyTimelineChart, visible: bool) -> None:
         if visible:
-            chart.canvas.pack(fill=tk.BOTH, expand=True, before=self.time_scale)
+            chart.canvas.pack(fill=tk.BOTH, expand=True)
 
     def _redraw_velocity_chart(self) -> None:
         """Rebuild velocity chart with only selected truck velocity lines."""
@@ -706,7 +1116,7 @@ class OnlineVisualizationWindow:
         self._btn(controls, "Toggle Legend", self._toggle_legend, "view").pack(side=tk.LEFT, padx=4)
         ttk.Checkbutton(controls, text="Gap charts", variable=self.show_gap_chart_var, command=self._apply_chart_visibility).pack(side=tk.LEFT, padx=(12, 2))
         ttk.Checkbutton(controls, text="Velocity chart", variable=self.show_velocity_chart_var, command=self._apply_chart_visibility).pack(side=tk.LEFT, padx=2)
-        ttk.Label(controls, textvariable=self.time_label_var).pack(side=tk.LEFT, padx=12)
+        tk.Label(controls, textvariable=self.time_label_var, font=("Arial", 18, "bold"), fg="#222").pack(side=tk.LEFT, padx=12)
         ttk.Label(controls, textvariable=self.playback_speed_label_var).pack(side=tk.LEFT, padx=(16, 4))
         ttk.Scale(controls, from_=0.3, to=2.0, orient=tk.HORIZONTAL, variable=self.playback_speed_var,
                   command=self._on_speed_changed, length=160).pack(side=tk.LEFT, padx=4)
@@ -758,7 +1168,13 @@ class OnlineVisualizationWindow:
         viz_frame = ttk.Frame(self.pane)
         charts_frame = ttk.Frame(self.pane)
         self.pane.add(viz_frame, minsize=280)
-        self.pane.add(charts_frame, minsize=180)
+        self.pane.add(charts_frame, minsize=60)
+        # Slider is packed FIRST in charts_frame so it always sits at the sash line
+        self.time_scale = ttk.Scale(
+            charts_frame, from_=0.0, to=0.0, orient=tk.HORIZONTAL,
+            variable=self.time_var, command=self._on_time_scale_changed,
+        )
+        self.time_scale.pack(fill=tk.X, padx=(int(CHART_LEFT_PX), int(CHART_RIGHT_MARGIN_PX)), pady=(4, 2))
 
         self.visualization = ConvoyPlaybackCanvas(
             viz_frame, width=1220, height=360,
@@ -788,11 +1204,6 @@ class OnlineVisualizationWindow:
             ),
             width=1220, height=120,
         )
-        self.time_scale = ttk.Scale(
-            charts_frame, from_=0.0, to=0.0, orient=tk.HORIZONTAL,
-            variable=self.time_var, command=self._on_time_scale_changed,
-        )
-        self.time_scale.pack(fill=tk.X, padx=(int(CHART_LEFT_PX), int(CHART_RIGHT_MARGIN_PX)), pady=(6, 8))
         self._apply_chart_visibility()
 
         # Legend above pane
@@ -946,7 +1357,7 @@ class OnlineVisualizationWindow:
             self._live_entry_index = self.current_frame_index
             self._output_rows_per_second = max(1, round(1.0 / loaded.simulation_parameters.output_resolution_s))
             self._live_stepper = LiveSimStepper(
-                loaded.initial_conditions,
+                timeline.apply_initial_gaps(loaded.initial_conditions),
                 loaded.simulation_parameters,
                 timeline,
                 braking,
@@ -1046,10 +1457,10 @@ class OnlineVisualizationWindow:
         for chart in (self.gap12_chart, self.gap23_chart, self.velocity_chart):
             chart.canvas.pack_forget()
         if self.show_gap_chart_var.get():
-            self.gap12_chart.canvas.pack(fill=tk.BOTH, expand=True, before=self.time_scale)
-            self.gap23_chart.canvas.pack(fill=tk.BOTH, expand=True, before=self.time_scale)
+            self.gap12_chart.canvas.pack(fill=tk.BOTH, expand=True)
+            self.gap23_chart.canvas.pack(fill=tk.BOTH, expand=True)
         if self.show_velocity_chart_var.get():
-            self.velocity_chart.canvas.pack(fill=tk.BOTH, expand=True, before=self.time_scale)
+            self.velocity_chart.canvas.pack(fill=tk.BOTH, expand=True)
 
     def _toggle_legend(self) -> None:
         if self._legend_frame.winfo_ismapped():
@@ -1215,10 +1626,13 @@ class ConvoySimGui(tk.Tk):
         self._scenario_edit_widget: tk.Entry | ttk.Combobox | None = None
         self._bulk_thread: threading.Thread | None = None
         self._bulk_cancel_requested = False
+        self.start_simulation_button: tk.Button | None = None
         self.open_visualization_button: tk.Button | None = None
         self.open_charts_button: tk.Button | None = None
         self.open_online_visualization_button: tk.Button | None = None
         self.show_bulk_results_button: tk.Button | None = None
+        self.scenario_insert_button: tk.Button | None = None
+        self.scenario_delete_button: tk.Button | None = None
         self._online_visualization_windows: list[OnlineVisualizationWindow] = []
         self.scenario_save_button: tk.Button | None = None
         self.scenario_save_as_button: tk.Button | None = None
@@ -1248,8 +1662,18 @@ class ConvoySimGui(tk.Tk):
         self._update_result_buttons()
 
     def _build_ui(self) -> None:
-        title = tk.Label(self, text="ConvoySIM", font=("Arial", 18, "bold"), anchor="w")
-        title.pack(fill=tk.X, padx=10, pady=(8, 2))
+        header_row = tk.Frame(self)
+        header_row.pack(fill=tk.X, padx=10, pady=(8, 2))
+        title = tk.Label(header_row, text="ConvoySIM", font=("Arial", 18, "bold"), anchor="w")
+        title.pack(side=tk.LEFT)
+        version_label = tk.Label(
+            header_row,
+            text=f"v{_APP_VERSION}  ·  {_DEPLOY_TIME}",
+            font=("Arial", 8),
+            anchor="e",
+            fg="#999",
+        )
+        version_label.pack(side=tk.RIGHT, anchor="s", pady=(8, 0))
         subtitle = tk.Label(self, text="Three-truck convoy simulation and review", font=("Arial", 10), anchor="w", fg="#555")
         subtitle.pack(fill=tk.X, padx=10, pady=(0, 6))
 
@@ -1279,29 +1703,48 @@ class ConvoySimGui(tk.Tk):
 
         controls = ttk.Frame(self)
         controls.pack(fill=tk.X, padx=8, pady=4)
-        self._colored_button(controls, "Start Simulation", self.run_simulation, "primary").pack(side=tk.LEFT, padx=4)
-        self._colored_button(controls, "Bulk simulations", self.open_bulk_simulations_tab, "edit").pack(side=tk.LEFT, padx=4)
-        self.open_visualization_button = self._colored_button(
-            controls,
-            "Open Visualization",
-            self.open_visualization_window,
-            "view",
-        )
+
+        # --- Left group: simulation + visualization buttons ---
+        self.start_simulation_button = self._colored_button(controls, "Start Simulation", self.run_simulation, "primary")
+        self.start_simulation_button.pack(side=tk.LEFT, padx=4)
+        self.open_visualization_button = self._colored_button(controls, "Open Visualization", self.open_visualization_window, "view")
         self.open_visualization_button.pack(side=tk.LEFT, padx=4)
-        self.open_charts_button = self._colored_button(controls, "Open Charts", self.open_charts, "view")
-        self.open_charts_button.pack(side=tk.LEFT, padx=4)
         self.open_online_visualization_button = self._colored_button(
-            controls, "Open Online Visualization", self.open_online_visualization_window, "view"
+            controls, "Open Online Visualization", self.open_online_visualization_window, "online_view"
         )
         self.open_online_visualization_button.pack(side=tk.LEFT, padx=4)
-        self.show_bulk_results_button = self._colored_button(controls, "Show Bulk Results", self.show_bulk_results_window, "view")
+        self.open_charts_button = self._colored_button(controls, "Open html Charts", self.open_charts, "charts")
+        self.open_charts_button.pack(side=tk.LEFT, padx=4)
+
+        # --- Separator ---
+        ttk.Separator(controls, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=2)
+
+        # --- Right group: bulk buttons ---
+        self._colored_button(controls, "Bulk Simulations", self.open_bulk_simulations_tab, "bulk").pack(side=tk.LEFT, padx=4)
+        self.show_bulk_results_button = self._colored_button(controls, "Show Bulk Results", self.show_bulk_results_window, "bulk_results")
         self.show_bulk_results_button.pack(side=tk.LEFT, padx=4)
-        self.status_label = tk.Label(controls, textvariable=self.status_var, anchor="w", fg="#555")
-        self.status_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(16, 4))
+
+        # --- Open SimGenerator (right side of controls row, left-aligned within its slot) ---
         tk.Button(
-            controls, text="Copy", command=self._copy_status_to_clipboard,
+            controls,
+            text="Open SimGenerator",
+            command=self.open_simgenerator,
+            bg="#37474f", fg="#ffffff",
+            activebackground="#546e7a", activeforeground="#ffffff",
+            relief=tk.RAISED, bd=2, padx=6, pady=2,
+            font=("Arial", 8),
+        ).pack(side=tk.LEFT, padx=(12, 4))
+        tools_row = tk.Frame(self)
+        tools_row.pack(fill=tk.X, padx=8, pady=(0, 2))
+        # --- Status bar (bordered) ---
+        status_frame = tk.Frame(tools_row, relief=tk.SUNKEN, bd=1, bg="#f0f0f0")
+        status_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 4), pady=2)
+        self.status_label = tk.Label(status_frame, textvariable=self.status_var, anchor="w", fg="#555", bg="#f0f0f0")
+        self.status_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6, pady=1)
+        tk.Button(
+            status_frame, text="Copy", command=self._copy_status_to_clipboard,
             bg="#90a4ae", fg="#111", relief=tk.RAISED, bd=1, padx=6, pady=1, font=("Arial", 8),
-        ).pack(side=tk.RIGHT, padx=(0, 4))
+        ).pack(side=tk.RIGHT, padx=(0, 2), pady=1)
         tk.Label(self, textvariable=self.loaded_scenario_label_var, anchor="w", font=("Arial", 10, "bold"), fg="#333").pack(
             fill=tk.X,
             padx=10,
@@ -1343,10 +1786,11 @@ class ConvoySimGui(tk.Tk):
         self.scenario_save_button.pack(side=tk.LEFT, padx=4)
         self.scenario_save_as_button = self._colored_button(scenario_controls, "Save As", self.save_scenario_tab_as, "save")
         self.scenario_save_as_button.pack(side=tk.LEFT, padx=4)
-        self._colored_button(scenario_controls, "Insert Row", self.insert_scenario_row, "edit").pack(side=tk.LEFT, padx=4)
-        self._colored_button(scenario_controls, "Delete Row", self.delete_scenario_rows, "danger").pack(side=tk.LEFT, padx=4)
+        self.scenario_insert_button = self._colored_button(scenario_controls, "Insert Row Below", self.insert_scenario_row, "edit")
+        self.scenario_delete_button = self._colored_button(scenario_controls, "Delete Row", self.delete_scenario_rows, "danger")
         self.scenario_table = self._build_table(scenario_frame)
         self.scenario_table.bind("<Double-1>", self._begin_scenario_cell_edit)
+        self.scenario_table.bind("<<TreeviewSelect>>", self._on_scenario_selection_changed)
 
         self._build_bulk_tab(bulk_frame)
 
@@ -1403,8 +1847,12 @@ class ConvoySimGui(tk.Tk):
         colors = {
             "primary": ("#1565c0", "#ffffff"),
             "view": ("#5e35b1", "#ffffff"),
+            "online_view": ("#00838f", "#ffffff"),
+            "charts": ("#6a1b9a", "#ffffff"),
+            "bulk": ("#ef6c00", "#ffffff"),
+            "bulk_results": ("#f57f17", "#ffffff"),
             "save": ("#2e7d32", "#ffffff"),
-            "edit": ("#ef6c00", "#ffffff"),
+            "edit": ("#bf360c", "#ffffff"),
             "danger": ("#b00020", "#ffffff"),
             "play": ("#00897b", "#ffffff"),
             "utility": ("#546e7a", "#ffffff"),
@@ -1413,7 +1861,7 @@ class ConvoySimGui(tk.Tk):
         options = {}
         if width is not None:
             options["width"] = width
-        return tk.Button(
+        btn = tk.Button(
             parent,
             text=text,
             command=command,  # type: ignore[arg-type]
@@ -1421,13 +1869,30 @@ class ConvoySimGui(tk.Tk):
             fg=foreground,
             activebackground=background,
             activeforeground=foreground,
-            disabledforeground="#dddddd",
+            disabledforeground="#888888",
             relief=tk.RAISED,
             bd=2,
             padx=6,
             pady=2,
             **options,
         )
+
+        def _on_state_change(btn: tk.Button = btn, bg: str = background) -> None:
+            if str(btn.cget("state")) == tk.DISABLED:
+                btn.configure(bg="#d0d0d0", fg="#888888", activebackground="#d0d0d0")
+            else:
+                btn.configure(bg=bg, fg=foreground, activebackground=bg)
+
+        _orig_configure = btn.configure
+
+        def _patched_configure(*args: object, **kwargs: object) -> object:
+            result = _orig_configure(*args, **kwargs)
+            if "state" in kwargs:
+                _on_state_change()
+            return result
+
+        btn.configure = _patched_configure  # type: ignore[method-assign]
+        return btn
 
     def _set_status(self, message: str, level: str = "info") -> None:
         self.status_var.set(message)
@@ -1560,6 +2025,7 @@ class ConvoySimGui(tk.Tk):
         cost_buttons.pack(fill=tk.X, padx=4, pady=(4, 0))
         self._colored_button(cost_buttons, "Select all", self.select_all_bulk_cost_functions, "utility").pack(side=tk.LEFT, padx=2)
         self._colored_button(cost_buttons, "Unselect all", self.unselect_all_bulk_cost_functions, "utility").pack(side=tk.LEFT, padx=2)
+        self._colored_button(cost_buttons, "?", self._show_cost_function_help, "#4a90d9").pack(side=tk.LEFT, padx=2)
         self.bulk_cost_function_listbox = tk.Listbox(cost_frame, selectmode=tk.MULTIPLE, exportselection=False)
         self.bulk_cost_function_listbox.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
         for cost_function in bulk_cost_function_names():
@@ -1730,10 +2196,13 @@ class ConvoySimGui(tk.Tk):
             self.scenario_save_as_button.configure(state=state)
 
     def _update_result_buttons(self) -> None:
+        has_scenario = bool(self.scenario_path.get().strip())
         has_output_rows = self._results_available and (
             bool(self.visualization_rows) or (bool(self.output_path.get()) and Path(self.output_path.get()).exists())
         )
         has_charts = bool(self.charts_path.get()) and Path(self.charts_path.get()).exists() and has_output_rows
+        if self.start_simulation_button is not None:
+            self.start_simulation_button.configure(state=tk.NORMAL if has_scenario else tk.DISABLED)
         if self.open_visualization_button is not None:
             self.open_visualization_button.configure(state=tk.NORMAL if has_output_rows else tk.DISABLED)
         if self.open_charts_button is not None:
@@ -1742,6 +2211,21 @@ class ConvoySimGui(tk.Tk):
             self.open_online_visualization_button.configure(state=tk.NORMAL if has_output_rows else tk.DISABLED)
         if self.show_bulk_results_button is not None:
             self.show_bulk_results_button.configure(state=tk.NORMAL if self.bulk_result is not None else tk.DISABLED)
+
+    def _on_scenario_selection_changed(self, _event: object = None) -> None:
+        if self.scenario_table is None:
+            return
+        has_selection = bool(self.scenario_table.selection())
+        if self.scenario_insert_button is not None:
+            if has_selection:
+                self.scenario_insert_button.pack(side=tk.LEFT, padx=4)
+            else:
+                self.scenario_insert_button.pack_forget()
+        if self.scenario_delete_button is not None:
+            if has_selection:
+                self.scenario_delete_button.pack(side=tk.LEFT, padx=4)
+            else:
+                self.scenario_delete_button.pack_forget()
 
     def _refresh_output_paths_from_scenario(self) -> None:
         self._refreshing_output_paths = True
@@ -1783,6 +2267,19 @@ class ConvoySimGui(tk.Tk):
             self._set_status(f"Simulation completed with {len(result.rows)} output rows.", "success")
         except Exception as error:  # noqa: BLE001 - GUI should surface any validation/runtime error.
             self._set_status(f"Error: {error}", "error")
+
+    def open_simgenerator(self) -> None:
+        import subprocess
+        simgen_dir = Path(__file__).parent.parent.parent / "SimGenerator"
+        try:
+            subprocess.Popen(
+                ["python", "gui.py"],
+                cwd=str(simgen_dir),
+                creationflags=subprocess.CREATE_NEW_CONSOLE if hasattr(subprocess, "CREATE_NEW_CONSOLE") else 0,
+            )
+            self._set_status("SimGenerator launched.", "success")
+        except Exception as exc:  # noqa: BLE001
+            self._set_status(f"Could not launch SimGenerator: {exc}", "error")
 
     def open_online_visualization_window(self) -> None:
         if not self.visualization_rows:
@@ -2095,7 +2592,19 @@ class ConvoySimGui(tk.Tk):
     def _bulk_row_selected_cost_value(self, row: BulkSimulationRunRow, cost_function: str) -> float:
         if cost_function == _TOTAL_WEIGHTED_COST_LABEL:
             return row.total_weighted_cost
-        return float(bulk_row_cost_value(row, cost_function))
+        if bulk_cost_function_is_count_based(cost_function):
+            return float(bulk_row_cost_value(row, cost_function))
+        return 0.0
+
+    def _show_cost_function_help(self) -> None:
+        import tempfile
+        html = _build_cost_function_help_html()
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".html", delete=False, encoding="utf-8", prefix="convoysim_cost_help_"
+        ) as tmp:
+            tmp.write(html)
+            path = tmp.name
+        os.startfile(path)  # type: ignore[attr-defined]
 
     def open_bulk_run_visualization(self, _event: tk.Event | None = None) -> None:
         if self.bulk_results_table is None:
@@ -2730,7 +3239,7 @@ class ConvoySimGui(tk.Tk):
         ).pack(side=tk.LEFT, padx=4)
         ttk.Checkbutton(playback_controls, text="T2", variable=self.show_truck2_velocity_var, command=self._on_truck_velocity_visibility_changed).pack(side=tk.LEFT, padx=(0, 2))
         ttk.Checkbutton(playback_controls, text="T3", variable=self.show_truck3_velocity_var, command=self._on_truck_velocity_visibility_changed).pack(side=tk.LEFT, padx=4)
-        ttk.Label(playback_controls, textvariable=self.time_label_var).pack(side=tk.LEFT, padx=12)
+        tk.Label(playback_controls, textvariable=self.time_label_var, font=("Arial", 18, "bold"), fg="#222").pack(side=tk.LEFT, padx=12)
         ttk.Label(playback_controls, textvariable=self.playback_speed_label_var).pack(side=tk.LEFT, padx=(18, 4))
         ttk.Scale(
             playback_controls,
@@ -2756,7 +3265,17 @@ class ConvoySimGui(tk.Tk):
         visualization_frame = ttk.Frame(self.visualization_pane)
         charts_frame = ttk.Frame(self.visualization_pane)
         self.visualization_pane.add(visualization_frame, minsize=280)
-        self.visualization_pane.add(charts_frame, minsize=180)
+        self.visualization_pane.add(charts_frame, minsize=60)
+        # Slider is packed FIRST in charts_frame so it always sits at the sash line
+        self.time_scale = ttk.Scale(
+            charts_frame,
+            from_=0.0,
+            to=0.0,
+            orient=tk.HORIZONTAL,
+            variable=self.time_var,
+            command=self._on_time_scale_changed,
+        )
+        self.time_scale.pack(fill=tk.X, padx=(int(CHART_LEFT_PX), int(CHART_RIGHT_MARGIN_PX)), pady=(4, 2))
         self.visualization = ConvoyPlaybackCanvas(
             visualization_frame,
             width=1220,
@@ -2830,15 +3349,6 @@ class ConvoySimGui(tk.Tk):
             height=120,
         )
         self._apply_chart_visibility()
-        self.time_scale = ttk.Scale(
-            charts_frame,
-            from_=0.0,
-            to=0.0,
-            orient=tk.HORIZONTAL,
-            variable=self.time_var,
-            command=self._on_time_scale_changed,
-        )
-        self.time_scale.pack(fill=tk.X, padx=(int(CHART_LEFT_PX), int(CHART_RIGHT_MARGIN_PX)), pady=(6, 8))
         self.visualization_window.after_idle(self._apply_visualization_divider_position)
         self.legend_frame = self._build_visualization_legend(self.visualization_window)
         self.legend_frame.pack(fill=tk.X, padx=8, pady=(0, 8), before=self.visualization_pane)
@@ -2976,10 +3486,7 @@ class ConvoySimGui(tk.Tk):
         if chart is None:
             return
         if visible:
-            if self.time_scale is not None:
-                chart.canvas.pack(fill=tk.BOTH, expand=True, before=self.time_scale)
-            else:
-                chart.canvas.pack(fill=tk.BOTH, expand=True)
+            chart.canvas.pack(fill=tk.BOTH, expand=True)
 
     def _apply_visualization_divider_position(self) -> None:
         if self.visualization_pane is None:
