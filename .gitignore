@@ -32,8 +32,11 @@ desktop.ini
 
 # Scratch / personal working files
 ChatGPT.txt
+ConvoySimKey
+ConvoySimKey.pub
 
 # Personal notes — never commit passwords, tokens, or secrets
+myNotes.md
 myNotes.md
 *.env
 *.env.local
