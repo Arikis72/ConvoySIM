@@ -30,6 +30,9 @@ desktop.ini
 *.swp
 *.swo
 
+# Scratch / personal working files
+ChatGPT.txt
+
 # Personal notes — never commit passwords, tokens, or secrets
 myNotes.md
 *.env
